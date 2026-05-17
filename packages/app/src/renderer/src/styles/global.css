@@ -1,0 +1,1784 @@
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  background: transparent;
+  font-family: -apple-system, 'Segoe UI', system-ui, sans-serif;
+  overflow: hidden;
+  height: 100vh;
+  width: 100vw;
+  user-select: none;
+}
+
+/* ── Keyframe animations ── */
+@keyframes model-spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+.model-switching-spinner {
+  display: block;
+  animation: model-spin 0.72s steps(8, end) infinite;
+  transform-origin: center;
+}
+
+@keyframes breathing {
+  0%, 100% { opacity: 0.55; }
+  50%       { opacity: 1;    }
+}
+
+@keyframes waitBlink {
+  0%, 85%, 100% { opacity: 1;   }
+  90%           { opacity: 0.3; }
+}
+
+@keyframes popIn {
+  from { transform: scale(0.4); opacity: 0; }
+  to   { transform: scale(1);   opacity: 1; }
+}
+
+@keyframes fadeSlideDown {
+  from { opacity: 0; transform: translateY(-8px); }
+  to   { opacity: 1; transform: translateY(0);    }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@keyframes islandContract {
+  from { transform: scaleX(1.05) scaleY(1.1); }
+  to   { transform: scaleX(1)    scaleY(1);   }
+}
+
+/* Separate animation for model picker — must include translateX(-50%) so it
+   doesn't clobber the centering transform set on the element itself. */
+@keyframes pickerSlideDown {
+  from { opacity: 0; transform: translateY(-5px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ── Island wrapper (full transparent window) ── */
+.island-wrapper {
+  position: fixed;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+/* ── Island pill ── */
+/* Shadow opacity / blur tuned so the spread (~22px) stays inside the
+   BrowserWindow's 30px horizontal padding — otherwise the OS clips it at the
+   window edge and the apparent shape becomes a rectangle. */
+.island {
+  margin-top: 10px;
+  background: #0a0a0a;
+  border-radius: 32px;
+  border: 1px solid rgba(255,255,255,0.08);
+  box-shadow:
+    0 0 0 1px rgba(255,255,255,0.04),
+    0 6px 22px rgba(0,0,0,0.45),
+    0 2px 6px rgba(0,0,0,0.30),
+    inset 0 1px 0 rgba(255,255,255,0.06);
+  cursor: pointer;
+  transition:
+    width  0.5s cubic-bezier(0.34, 1.56, 0.64, 1),
+    height 0.5s cubic-bezier(0.34, 1.56, 0.64, 1),
+    border-radius 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+  overflow: hidden;
+  animation: islandContract 0.3s ease;
+}
+
+.island:hover {
+  border-color: rgba(255,255,255,0.14);
+  box-shadow:
+    0 0 0 1px rgba(255,255,255,0.06),
+    0 8px 26px rgba(0,0,0,0.55),
+    0 2px 6px rgba(0,0,0,0.38),
+    inset 0 1px 0 rgba(255,255,255,0.08);
+}
+
+.island-pill {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 16px;
+  height: 36px;
+  width: 340px;
+  position: relative;
+}
+
+/* ── Pill center (model name or CCC logo) ── */
+.pill-center {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+}
+
+/* ── Pixel CCC logo ── */
+.ccc-logo {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.7;
+  transition: opacity 0.2s;
+}
+
+.island:hover .ccc-logo {
+  opacity: 0.9;
+}
+
+/* ── Rings (two circles side-by-side, hover for tooltip) ── */
+.rings {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+/* ── Logo / state icon ── */
+.logo-icon {
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.logo-breathing { animation: breathing 2.8s ease-in-out infinite; }
+.logo-waiting   { animation: waitBlink 3.5s ease-in-out infinite; }
+.logo-pop       { animation: popIn 0.4s cubic-bezier(0.34,1.56,0.64,1) both; }
+
+/* ── Session list ── */
+.session-group-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+.session-group-toggle {
+  width: 22px;
+  height: 18px;
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 999px;
+  background: rgba(255,255,255,0.04);
+  color: rgba(255,255,255,0.55);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.session-group-toggle:hover {
+  background: rgba(255,255,255,0.08);
+  color: rgba(255,255,255,0.78);
+}
+
+.sessions-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 120px;
+  overflow-y: auto;
+  margin-bottom: 8px;
+}
+
+.sessions-list::-webkit-scrollbar       { width: 3px; }
+.sessions-list::-webkit-scrollbar-track { background: transparent; }
+.sessions-list::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 2px; }
+
+.session-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: 7px;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.05);
+  transition: background 0.15s, border-color 0.15s;
+  cursor: pointer;
+}
+
+.session-row:hover { background: rgba(255,255,255,0.06); }
+
+.session-row.active {
+  background: rgba(204,155,122,0.08);
+  border-color: rgba(204,155,122,0.25);
+}
+
+.session-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: oklch(0.65 0.18 145);
+}
+
+.session-name {
+  flex: 1;
+  font-size: 11.5px;
+  color: rgba(255,255,255,0.7);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.session-name-input {
+  flex: 1;
+  background: rgba(255,255,255,0.08);
+  border: 1px solid rgba(255,255,255,0.2);
+  border-radius: 4px;
+  color: rgba(255,255,255,0.9);
+  font-size: 11.5px;
+  font-family: inherit;
+  padding: 1px 5px;
+  outline: none;
+  min-width: 0;
+}
+
+.session-row-recovery {
+  margin-top: 2px;
+  color: rgba(120,180,220,0.68);
+  font-size: 9px;
+}
+
+.session-close {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: rgba(255,60,60,0.12);
+  border: 1px solid rgba(255,60,60,0.3);
+  color: rgba(255,80,80,0.75);
+  font-size: 9px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: background 0.15s, color 0.15s;
+  line-height: 1;
+}
+
+.session-close:hover {
+  background: rgba(255,60,60,0.3);
+  color: rgba(255,100,100,1);
+}
+
+/* ── Remote control button ── */
+.session-remote {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.12);
+  color: rgba(255,255,255,0.55);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+  padding: 0;
+}
+
+.session-remote:hover {
+  background: rgba(110,170,255,0.16);
+  border-color: rgba(110,170,255,0.45);
+  color: rgba(255,255,255,0.95);
+}
+
+/* ── Inline model picker strip (collapsed pill variant) ── */
+.model-picker-strip {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+  animation: pickerSlideDown 0.18s ease;
+}
+
+.model-picker-anthropic-row {
+  display: flex;
+  gap: 5px;
+}
+
+.model-picker-divider {
+  height: 1px;
+  background: rgba(255,255,255,0.08);
+  margin: 0 4px;
+}
+
+.model-picker-custom-row {
+  display: flex;
+  justify-content: center;
+  gap: 5px;
+}
+
+.model-picker-codex-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 5px;
+  width: 100%;
+  max-width: 100%;
+}
+
+/* Codex-mode model chip — same shape but green-tinted to distinguish from
+ * the Anthropic (orange accent) and API (blue accent) chips. */
+.model-chip--codex {
+  flex: 1 1 0;
+  min-width: 0;
+  width: 100%;
+  border-color: rgba(100,200,140,0.30);
+  background: rgba(100,200,140,0.06);
+}
+
+.model-chip--codex:hover {
+  background: rgba(100,200,140,0.12);
+  border-color: rgba(100,200,140,0.45);
+}
+
+.model-chip--codex .model-chip__name {
+  color: rgba(160,220,190,0.92);
+}
+
+.model-chip--codex .model-chip__desc {
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+/* API Sessions list — same row layout as the Anthropic group but with a
+ * subtle blue-tinted hairline so the visual split between groups is
+ * immediately legible without per-row badges. */
+.sessions-list--api .session-row {
+  background: rgba(120,180,220,0.04);
+  border: 1px solid rgba(120,180,220,0.12);
+}
+
+.sessions-list--api .session-row:hover {
+  background: rgba(120,180,220,0.08);
+}
+
+.sessions-list--api .session-row.active {
+  background: rgba(120,180,220,0.14);
+  border-color: rgba(120,180,220,0.40);
+}
+
+/* Codex Sessions list — same layout as the other groups, green-tinted. */
+.sessions-list--codex .session-row {
+  background: rgba(100,200,140,0.04);
+  border: 1px solid rgba(100,200,140,0.12);
+}
+
+.sessions-list--codex .session-row:hover {
+  background: rgba(100,200,140,0.08);
+}
+
+.sessions-list--codex .session-row.active {
+  background: rgba(100,200,140,0.14);
+  border-color: rgba(100,200,140,0.40);
+}
+
+/* Per-session API stats shown beneath the workspace path. Two compact
+ * lines: balance + weekly spending, then per-session token counts + cost.
+ * Both dim further when the underlying data is stale (network probe failed). */
+.session-row-api-stats {
+  margin-top: 3px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.session-row-api-balance,
+.session-row-api-tokens {
+  font-size: 9.5px;
+  color: rgba(255,255,255,0.55);
+  font-family: 'Cascadia Code', 'Consolas', monospace;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.session-row-api-balance.is-stale {
+  color: rgba(255,255,255,0.28);
+  font-style: italic;
+}
+
+.session-row-api-sep {
+  margin: 0 5px;
+  color: rgba(255,255,255,0.25);
+}
+
+/* API-mode chip is the same shape as the Anthropic ones but with a hint
+ * of brand colour and a fixed minimum width so a single button still
+ * feels deliberate (not a stray click target). */
+.model-chip--api {
+  flex: 0 0 auto;
+  min-width: 130px;
+  border-color: rgba(120,180,220,0.30);
+  background: rgba(120,180,220,0.06);
+}
+
+.model-chip--api:hover {
+  background: rgba(120,180,220,0.12);
+  border-color: rgba(120,180,220,0.45);
+}
+
+.model-chip--api .model-chip__name {
+  color: rgba(180,210,235,0.92);
+}
+
+.model-picker-strip--pill {
+  padding: 10px;
+  border-top: 1px solid rgba(255,255,255,0.06);
+}
+
+.model-picker-strip--panel {
+  margin-bottom: 12px;
+}
+
+/* soften bottom corners when the strip extends below the collapsed pill */
+.island--with-picker {
+  border-bottom-left-radius: 18px;
+  border-bottom-right-radius: 18px;
+}
+
+.model-chip {
+  flex: 1;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+  padding: 7px 4px 6px;
+  border-radius: 9px;
+  border: 1px solid rgba(255,255,255,0.08);
+  background: rgba(255,255,255,0.03);
+  cursor: pointer;
+  text-align: center;
+  font-family: inherit;
+  transition: background 0.15s, border-color 0.15s;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+
+.model-chip:hover:not(.model-chip--selected) {
+  background: rgba(255,255,255,0.07);
+  border-color: rgba(255,255,255,0.14);
+}
+
+.model-chip--selected {
+  background: rgba(204,155,122,0.12);
+  border-color: rgba(204,155,122,0.38);
+}
+
+.model-chip__name {
+  font-size: 11px;
+  font-weight: 500;
+  color: rgba(255,255,255,0.80);
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.2;
+}
+
+.model-chip--selected .model-chip__name {
+  color: rgba(204,155,122,0.95);
+}
+
+.model-chip__desc {
+  font-size: 9px;
+  color: rgba(255,255,255,0.28);
+  line-height: 1.3;
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.model-name-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-family: inherit;
+  text-align: center;
+  padding: 2px 8px;
+  border-radius: 5px;
+  transition: background 0.15s;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.model-name-btn:hover { background: rgba(255,255,255,0.07); }
+
+/* ── Add session button ── */
+.add-session-btn {
+  width: 100%;
+  height: 28px;
+  border-radius: 7px;
+  border: 1px dashed rgba(255,255,255,0.12);
+  background: transparent;
+  color: rgba(255,255,255,0.3);
+  font-size: 11px;
+  cursor: pointer;
+  font-family: inherit;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  margin-bottom: 10px;
+}
+
+.add-session-btn:hover {
+  border-color: rgba(255,255,255,0.22);
+  color: rgba(255,255,255,0.6);
+  background: rgba(255,255,255,0.03);
+}
+
+/* ── Model name + status text ── */
+.model-name {
+  flex: 1;
+  text-align: center;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: rgba(255,255,255,0.88);
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* When the pill is showing a hover hint instead of the active model name,
+ * dim it slightly + drop the font-weight so it visibly differs from the
+ * default model display and the user reads it as transient info, not as a
+ * model rename. */
+.model-name.is-hover-hint {
+  font-weight: 400;
+  font-size: 11px;
+  color: rgba(180,210,255,0.85);
+}
+
+/* Wraps each pill ring so the whole ring (svg + label) is one mouse target. */
+.ring-hover-target {
+  display: flex;
+  align-items: center;
+  cursor: default;
+}
+
+/* Replaces the 5h-usage ring on API-mode sessions — same visual footprint
+ * as a 22px ring (so the rings row doesn't shift) but renders cost text
+ * directly. Hover tooltip carries the token breakdown. */
+.usage-cost-badge {
+  min-width: 22px;
+  height: 22px;
+  padding: 0 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 9.5px;
+  font-weight: 600;
+  font-family: 'Cascadia Code', 'Consolas', monospace;
+  color: rgba(180,210,255,0.85);
+  background: rgba(120,180,220,0.08);
+  border: 1px solid rgba(120,180,220,0.20);
+  border-radius: 11px;
+  cursor: default;
+  white-space: nowrap;
+}
+
+.codex-process-badge {
+  width: 48px;
+  height: 22px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 9px;
+  font-weight: 700;
+  color: rgba(150,235,180,0.95);
+  background: rgba(100,200,140,0.10);
+  border: 1px solid rgba(100,200,140,0.18);
+}
+
+/* Small dim secondary text under the weekly-usage bar showing the
+ * countdown until the rate-limit window resets. Hidden when reset
+ * timestamp is unknown. */
+.usage-reset-hint {
+  margin-top: 3px;
+  font-size: 9.5px;
+  color: rgba(255,255,255,0.32);
+  text-align: right;
+  font-family: 'Cascadia Code', 'Consolas', monospace;
+}
+
+.status-text {
+  font-size: 10px;
+  color: rgba(255,255,255,0.35);
+  margin-top: 1px;
+  display: block;
+  text-align: center;
+  letter-spacing: 0.03em;
+}
+
+/* ── Progress rings ── */
+.ring-wrap {
+  position: relative;
+  width: 22px;
+  height: 22px;
+}
+
+.ring-wrap svg { transform: rotate(-90deg); }
+
+.ring-bg {
+  fill: none;
+  stroke: rgba(255,255,255,0.1);
+  stroke-width: 2.5;
+}
+
+.ring-fg {
+  fill: none;
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  transition: stroke-dashoffset 1s cubic-bezier(0.4, 0, 0.2, 1), stroke 0.5s;
+}
+
+.ring-label {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 6.5px;
+  font-weight: 700;
+  color: rgba(255,255,255,0.65);
+  letter-spacing: -0.02em;
+  line-height: 1;
+}
+
+/* ── Expanded panel ── */
+/* Animation lives on the inner `.expanded-content` (not `.island-expanded`)
+   so the pill itself doesn't fade-flash to opacity 0 when expanding. The
+   pill's own width / height / border-radius transitions handle the resize. */
+.island-expanded {
+  width: 340px;
+  border-radius: 24px;
+}
+
+.expanded-content {
+  padding: 12px 16px 16px;
+  border-top: 1px solid rgba(255,255,255,0.06);
+  animation: fadeIn 0.18s ease;
+}
+
+.accessibility-banner {
+  margin: 0 -16px 12px;
+  padding: 10px 16px;
+  background: rgba(255, 176, 32, 0.10);
+  border-top: 1px solid rgba(255, 176, 32, 0.25);
+  border-bottom: 1px solid rgba(255, 176, 32, 0.25);
+  color: rgba(255, 211, 145, 0.95);
+}
+
+.accessibility-banner__title {
+  font-size: 12px;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.accessibility-banner__hint {
+  font-size: 11px;
+  color: rgba(255, 211, 145, 0.75);
+  line-height: 1.45;
+}
+
+.accessibility-banner__btn {
+  display: inline-block;
+  margin-top: 8px;
+  padding: 4px 10px;
+  background: rgba(255, 176, 32, 0.18);
+  border: 1px solid rgba(255, 176, 32, 0.40);
+  border-radius: 4px;
+  color: rgba(255, 211, 145, 0.95);
+  font-size: 11px;
+  font-family: inherit;
+  cursor: pointer;
+}
+.accessibility-banner__btn:hover {
+  background: rgba(255, 176, 32, 0.30);
+}
+
+.expanded-label {
+  font-size: 11px;
+  color: rgba(255,255,255,0.35);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.expanded-value {
+  font-size: 12px;
+  color: rgba(255,255,255,0.75);
+  font-weight: 500;
+}
+
+.bar-wrap {
+  height: 4px;
+  background: rgba(255,255,255,0.08);
+  border-radius: 2px;
+  margin-top: 4px;
+  overflow: hidden;
+}
+
+.bar-fill {
+  height: 100%;
+  border-radius: 2px;
+  transition: width 1s cubic-bezier(0.4,0,0.2,1), background 0.5s;
+}
+
+.divider {
+  height: 1px;
+  background: rgba(255,255,255,0.06);
+  margin: 8px 0 12px;
+}
+
+/* ── Action buttons ── */
+.action-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.action-btn {
+  flex: 1;
+  height: 30px;
+  border-radius: 8px;
+  border: 1px solid rgba(255,255,255,0.12);
+  background: rgba(255,255,255,0.05);
+  color: rgba(255,255,255,0.7);
+  font-size: 11.5px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.2s, border-color 0.2s, color 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  font-family: inherit;
+}
+
+.action-btn:hover {
+  background: rgba(255,255,255,0.1);
+  border-color: rgba(255,255,255,0.2);
+  color: rgba(255,255,255,0.95);
+}
+
+.action-btn.danger { border-color: rgba(255,80,80,0.25); color: rgba(255,100,100,0.8); }
+
+.action-btn.danger:hover {
+  background: rgba(255,80,80,0.12);
+  border-color: rgba(255,80,80,0.4);
+  color: rgba(255,110,110,1);
+}
+
+.action-btn.active {
+  background: rgba(204,155,122,0.1);
+  border-color: rgba(204,155,122,0.3);
+  color: rgba(255,255,255,0.85);
+}
+
+/* ── Settings panel ── */
+.settings-panel {
+  margin-top: 8px;
+  padding: 10px 12px;
+  background: rgba(255,255,255,0.02);
+  border: 1px solid rgba(255,255,255,0.07);
+  border-radius: 9px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  animation: fadeSlideDown 0.2s ease;
+}
+
+.settings-label {
+  font-size: 10.5px;
+  color: rgba(255,255,255,0.35);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.settings-lang-row {
+  display: flex;
+  gap: 5px;
+}
+
+.settings-lang-btn {
+  flex: 1;
+  height: 26px;
+  border-radius: 6px;
+  border: 1px solid rgba(255,255,255,0.1);
+  background: rgba(255,255,255,0.04);
+  color: rgba(255,255,255,0.55);
+  font-size: 11.5px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.settings-lang-btn:hover {
+  background: rgba(255,255,255,0.08);
+  color: rgba(255,255,255,0.85);
+}
+
+.settings-lang-btn.is-active {
+  background: rgba(204,155,122,0.12);
+  border-color: rgba(204,155,122,0.4);
+  color: rgba(255,255,255,0.95);
+  font-weight: 600;
+}
+
+/* ── Settings → API zone ── */
+.settings-api-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.cli-panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.cli-panel__switch {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  width: 172px;
+  padding: 2px;
+  border-radius: 7px;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.08);
+}
+
+.cli-panel__tab {
+  height: 22px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: rgba(255,255,255,0.42);
+  font-size: 10.5px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.16s, color 0.16s;
+}
+
+.cli-panel__tab:hover {
+  color: rgba(255,255,255,0.78);
+}
+
+.cli-panel__tab.is-active {
+  background: rgba(204,155,122,0.16);
+  color: rgba(255,255,255,0.92);
+}
+
+.cli-panel__viewport {
+  overflow: hidden;
+}
+
+.cli-panel__track {
+  display: flex;
+  width: 200%;
+  transition: transform 0.2s ease;
+}
+
+.cli-panel__track.is-codex {
+  transform: translateX(-50%);
+}
+
+.cli-panel__page {
+  flex: 0 0 50%;
+  min-width: 0;
+}
+
+.cli-panel__page + .cli-panel__page {
+  padding-left: 8px;
+}
+
+.api-empty {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.api-empty__hint {
+  font-size: 11px;
+  color: rgba(255,255,255,0.4);
+}
+
+.api-empty__command {
+  flex: 1 1 100%;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: rgba(255,255,255,0.06);
+  color: rgba(255,255,255,0.78);
+  font-size: 11px;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.api-add-btn,
+.api-action-btn,
+.api-link-btn {
+  height: 24px;
+  padding: 0 10px;
+  border-radius: 6px;
+  border: 1px solid rgba(255,255,255,0.12);
+  background: rgba(255,255,255,0.04);
+  color: rgba(255,255,255,0.75);
+  font-size: 11px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.api-add-btn:hover,
+.api-action-btn:hover,
+.api-link-btn:hover {
+  background: rgba(255,255,255,0.08);
+  color: rgba(255,255,255,0.95);
+}
+
+.api-action-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.api-action-btn--primary {
+  background: rgba(204,155,122,0.18);
+  border-color: rgba(204,155,122,0.45);
+  color: rgba(255,255,255,0.95);
+}
+
+.api-action-btn--danger {
+  color: rgba(255,140,140,0.85);
+  border-color: rgba(255,140,140,0.25);
+}
+
+.api-action-btn--danger:hover {
+  background: rgba(255,140,140,0.12);
+  color: rgba(255,180,180,1);
+}
+
+.api-link-btn {
+  height: 20px;
+  padding: 0 6px;
+  font-size: 10.5px;
+  background: transparent;
+  border-color: transparent;
+  color: rgba(204,155,122,0.85);
+}
+
+.api-link-btn:hover {
+  background: rgba(255,255,255,0.05);
+  color: rgba(204,155,122,1);
+}
+
+.api-card,
+.api-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 7px;
+}
+
+.api-card__title,
+.api-form__title {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: rgba(255,255,255,0.85);
+}
+
+.api-card__row,
+.api-form__row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.api-card__label {
+  font-size: 10.5px;
+  color: rgba(255,255,255,0.45);
+  min-width: 44px;
+}
+
+.api-card__key {
+  flex: 1;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10.5px;
+  color: rgba(255,255,255,0.55);
+  letter-spacing: 0.05em;
+}
+
+.api-key-input {
+  flex: 1;
+  height: 24px;
+  padding: 0 6px;
+  border-radius: 5px;
+  border: 1px solid rgba(255,255,255,0.12);
+  background: rgba(0,0,0,0.25);
+  color: rgba(255,255,255,0.9);
+  font-size: 11px;
+  font-family: inherit;
+}
+
+.api-key-input:focus {
+  outline: none;
+  border-color: rgba(204,155,122,0.55);
+}
+
+.api-card__actions,
+.api-form__actions {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.api-status {
+  font-size: 10.5px;
+  padding: 4px 8px;
+  border-radius: 5px;
+}
+
+.api-status--ok {
+  color: rgba(150,220,170,0.95);
+  background: rgba(80,180,120,0.10);
+  border: 1px solid rgba(80,180,120,0.25);
+}
+
+.api-status--err {
+  color: rgba(255,170,170,0.95);
+  background: rgba(255,90,90,0.08);
+  border: 1px solid rgba(255,90,90,0.25);
+}
+
+/* ── Notification popup (below pill, separate from expanded panel) ── */
+@keyframes notifSlideDown {
+  from { opacity: 0; transform: translateY(-6px) scale(0.97); }
+  to   { opacity: 1; transform: translateY(0)    scale(1);    }
+}
+
+.notif-popup {
+  margin-top: 6px;
+  background: #0e0e0e;
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 16px;
+  width: 340px;
+  animation: notifSlideDown 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
+  box-shadow: 0 6px 22px rgba(0,0,0,0.45);
+  /* `overflow: hidden` keeps any inner overflow from escaping the rounded
+     frame. Per-variant containers (`.notif-perm-wrap`) own their own
+     `max-height` + flex layout so that the column layout only applies to
+     the question popup — done/msg popups stay in their natural row
+     layout (icon, text, ✕). */
+  overflow: hidden;
+}
+
+/* ── API switch popup (Chunk C) — same family as notif-popup ── */
+.api-switch-popup {
+  position: relative;
+  margin-top: 6px;
+  background: #0e0e0e;
+  border: 1px solid rgba(120,180,220,0.30);
+  border-radius: 16px;
+  width: 340px;
+  box-sizing: border-box;
+  padding: 16px 18px 14px;
+  animation: notifSlideDown 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
+  box-shadow: 0 6px 22px rgba(0,0,0,0.45);
+}
+
+.engine-picker-popup {
+  position: relative;
+  margin-top: 6px;
+  width: 340px;
+  box-sizing: border-box;
+  background: #0e0e0e;
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 32px;
+  padding: 16px 18px 14px;
+  z-index: 30;
+  animation: notifSlideDown 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
+  box-shadow: 0 6px 22px rgba(0,0,0,0.45);
+}
+
+.engine-picker-popup__title {
+  color: rgba(255,255,255,0.92);
+  font-size: 13px;
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+
+.engine-picker-popup__hint {
+  color: rgba(255,255,255,0.42);
+  font-size: 10px;
+  margin-bottom: 10px;
+}
+
+.engine-picker-popup__actions {
+  display: grid;
+  gap: 7px;
+}
+
+.engine-picker-popup__btn {
+  border: 1px solid rgba(255,255,255,0.10);
+  border-radius: 18px;
+  background: rgba(255,255,255,0.04);
+  color: rgba(255,255,255,0.82);
+  padding: 9px 10px;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.engine-picker-popup__btn:hover:not(:disabled) {
+  background: rgba(204,155,122,0.12);
+  border-color: rgba(204,155,122,0.26);
+}
+
+.engine-picker-popup__btn--codex:hover:not(:disabled) {
+  background: rgba(100,200,140,0.12);
+  border-color: rgba(100,200,140,0.26);
+}
+
+.engine-picker-popup__btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.engine-picker-popup__name,
+.engine-picker-popup__desc {
+  display: block;
+}
+
+.engine-picker-popup__name {
+  font-size: 11px;
+  font-weight: 700;
+  margin-bottom: 2px;
+}
+
+.engine-picker-popup__desc {
+  font-size: 9px;
+  color: rgba(255,255,255,0.45);
+}
+
+.api-switch-popup__title {
+  font-size: 12px;
+  font-weight: 600;
+  color: rgba(180,210,235,0.95);
+  letter-spacing: 0.02em;
+}
+
+.api-switch-popup__provider {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  color: rgba(255,255,255,0.55);
+  margin-top: 2px;
+  overflow-wrap: anywhere;
+}
+
+.api-switch-popup__hint {
+  font-size: 10.5px;
+  color: rgba(255,255,255,0.45);
+  margin-top: 8px;
+}
+
+.api-switch-popup--codex-model {
+  border-color: rgba(100,200,140,0.30);
+}
+
+.api-switch-popup--codex-model .api-switch-popup__title {
+  color: rgba(160,220,190,0.95);
+}
+
+.codex-effort-label {
+  margin-top: 12px;
+  margin-bottom: 6px;
+  color: rgba(255,255,255,0.42);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.codex-effort-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 5px;
+}
+
+.codex-effort-btn {
+  height: 28px;
+  min-width: 0;
+  border-radius: 7px;
+  border: 1px solid rgba(255,255,255,0.10);
+  background: rgba(255,255,255,0.04);
+  color: rgba(255,255,255,0.72);
+  font-size: 10.5px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.codex-effort-btn:hover:not(:disabled) {
+  background: rgba(100,200,140,0.10);
+  border-color: rgba(100,200,140,0.30);
+  color: rgba(255,255,255,0.90);
+}
+
+.codex-effort-btn.is-selected {
+  background: rgba(100,200,140,0.16);
+  border-color: rgba(100,200,140,0.45);
+  color: rgba(210,245,225,0.98);
+}
+
+.codex-effort-btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.api-switch-popup__actions {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.api-switch-popup__btn {
+  height: 30px;
+  padding: 0 16px;
+  border-radius: 7px;
+  border: 1px solid rgba(255,255,255,0.12);
+  background: rgba(255,255,255,0.04);
+  color: rgba(255,255,255,0.85);
+  font-size: 11.5px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.api-switch-popup__btn:hover:not(:disabled) {
+  background: rgba(120,180,220,0.10);
+  border-color: rgba(120,180,220,0.35);
+}
+
+.api-switch-popup__btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.api-switch-popup__btn--primary {
+  background: rgba(120,180,220,0.14);
+  border-color: rgba(120,180,220,0.40);
+  color: rgba(220,235,250,0.98);
+}
+
+.api-switch-popup__esc {
+  text-align: center;
+  font-size: 10px;
+  color: rgba(255,255,255,0.30);
+  margin-top: 8px;
+}
+
+.notif-done-wrap {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 10px 18px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+/* `.notif-done-wrap` shares its DOM node with `.notif-popup` (both classes
+   on one div), so setting `background` here REPLACES the popup's solid
+   `#0e0e0e` base — a translucent rgba would make the whole popup go
+   see-through on hover. Use a slightly-lighter solid instead. */
+.notif-done-wrap:hover { background: #161616; }
+
+.notif-done-icon {
+  font-size: 14px;
+  color: #5CC878;
+  flex-shrink: 0;
+}
+
+.notif-done-text {
+  font-size: 12px;
+  color: rgba(255,255,255,0.65);
+  font-weight: 500;
+}
+
+.notif-perm-wrap {
+  padding: 12px 16px 14px;
+  /* Stack: header (fixed) → question (flex-growing, scrollable) → options
+     (own internal scroll already) → actions (fixed). The question and the
+     options together absorb any extra height; everything else stays
+     anchored. min-height: 0 lets flex children actually shrink. The
+     max-height + overflow lives here (not on `.notif-popup`) so it only
+     applies to the question variant. */
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  max-height: calc(100vh - 60px);
+  overflow: hidden;
+}
+
+.notif-perm-header {
+  font-size: 11px;
+  font-weight: 600;
+  color: rgba(255,210,60,0.9);
+  margin-bottom: 6px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex: 0 0 auto;
+}
+
+.notif-perm-tool {
+  font-size: 12px;
+  color: rgba(255,255,255,0.7);
+  font-weight: 500;
+  margin-bottom: 4px;
+  font-family: 'Cascadia Code', 'Fira Code', monospace;
+}
+
+.notif-perm-tool {
+  font-size: 11.5px;
+  color: rgba(255,255,255,0.7);
+  font-weight: 500;
+  margin-bottom: 4px;
+  font-family: 'Cascadia Code', 'Fira Code', monospace;
+}
+
+.notif-perm-question {
+  font-size: 11.5px;
+  color: rgba(255,255,255,0.8);
+  line-height: 1.5;
+  margin-bottom: 8px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  /* `flex: 0 1 auto` — natural content size, but the question is the only
+     child that's allowed to shrink. When the popup hits its viewport cap
+     the question gives up height first (scrolling internally), so the
+     options + actions below it always stay visible. Short questions still
+     render at content height, keeping the popup compact. */
+  flex: 0 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.notif-perm-question::-webkit-scrollbar       { width: 3px; }
+.notif-perm-question::-webkit-scrollbar-track { background: transparent; }
+.notif-perm-question::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.12); border-radius: 2px; }
+
+.notif-perm-input {
+  font-size: 10px;
+  color: rgba(255,255,255,0.35);
+  font-family: 'Cascadia Code', 'Fira Code', monospace;
+  margin-bottom: 8px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ── Question options (AskUserQuestion) ── */
+.notif-options {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 8px;
+  max-height: 180px;
+  overflow-y: auto;
+  /* `flex: 0 0 auto` — never shrink. When the popup is space-constrained,
+     the question above us scrolls instead, so every option (and the
+     action row below) stays clickable. */
+  flex: 0 0 auto;
+}
+
+.notif-options::-webkit-scrollbar       { width: 3px; }
+.notif-options::-webkit-scrollbar-track { background: transparent; }
+.notif-options::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 2px; }
+
+.notif-option-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  width: 100%;
+  padding: 7px 10px;
+  border-radius: 7px;
+  border: 1px solid rgba(255,255,255,0.1);
+  background: rgba(255,255,255,0.04);
+  color: rgba(255,255,255,0.85);
+  font-family: inherit;
+  font-size: 11.5px;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.notif-option-btn:hover {
+  background: rgba(204,155,122,0.1);
+  border-color: rgba(204,155,122,0.3);
+}
+
+.notif-option-label {
+  font-weight: 500;
+  color: rgba(255,255,255,0.9);
+}
+
+.notif-option-desc {
+  font-size: 10.5px;
+  color: rgba(255,255,255,0.45);
+  line-height: 1.35;
+}
+
+/* ── Reply textarea ── */
+.notif-reply {
+  margin-bottom: 8px;
+  flex: 0 0 auto;
+}
+
+.perm-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.notif-reply-input {
+  width: 100%;
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.14);
+  border-radius: 6px;
+  color: rgba(255,255,255,0.88);
+  font-size: 11.5px;
+  font-family: inherit;
+  padding: 6px 8px;
+  outline: none;
+  resize: none;
+  line-height: 1.4;
+  box-sizing: border-box;
+  transition: border-color 0.15s;
+}
+
+.notif-reply-input:focus {
+  border-color: rgba(255,255,255,0.28);
+}
+
+.notif-reply-input::placeholder {
+  color: rgba(255,255,255,0.25);
+}
+
+.notif-perm-actions {
+  display: flex;
+  gap: 5px;
+  flex-wrap: wrap;
+  flex: 0 0 auto;
+}
+
+.notif-msg-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  cursor: pointer;
+}
+
+.notif-close-btn {
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  background: transparent;
+  border: none;
+  color: rgba(255,255,255,0.35);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  margin-left: auto;
+  padding: 0;
+  transition: color 0.15s, background 0.15s;
+}
+
+.notif-close-btn:hover {
+  color: rgba(255,255,255,0.9);
+  background: rgba(255,255,255,0.08);
+}
+
+.notif-msg-text {
+  font-size: 11.5px;
+  color: rgba(255,255,255,0.6);
+  line-height: 1.5;
+}
+
+/* ── Permission banner ── */
+.permission-banner {
+  background: rgba(255,200,0,0.07);
+  border: 1px solid rgba(255,200,0,0.2);
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  animation: fadeSlideDown 0.3s ease;
+}
+
+.permission-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: rgba(255,210,60,0.9);
+  margin-bottom: 4px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.permission-msg {
+  font-size: 11px;
+  color: rgba(255,255,255,0.5);
+  line-height: 1.5;
+  font-family: 'Cascadia Code', 'Fira Code', monospace;
+}
+
+.perm-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.perm-btn {
+  padding: 5px 12px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  border: none;
+  font-family: inherit;
+  transition: opacity 0.2s;
+}
+
+.perm-btn:hover { opacity: 0.85; }
+.perm-btn.allow  { background: rgba(90,200,90,0.85);  color: #061206; }
+.perm-btn.reply  { background: oklch(0.70 0.16 55);   color: #1a0d00; font-weight: 600; }
+.perm-btn.always { background: rgba(255,210,60,0.8);  color: #1a1400; }
+.perm-btn.deny   { background: rgba(255,255,255,0.08); color: rgba(255,255,255,0.5); border: 1px solid rgba(255,255,255,0.12); }
+
+
+/* ════════════════════════════════════════════════════════════════════════════
+   Remote Control Popup
+   ════════════════════════════════════════════════════════════════════════════ */
+
+.remote-popup {
+  margin-top: 6px;
+  background: #0e0e0e;
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 14px;
+  width: 320px;
+  padding: 14px 16px 16px;
+  animation: notifSlideDown 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
+  box-shadow: 0 6px 22px rgba(0,0,0,0.45);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.remote-popup-header {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 18px;
+}
+
+.remote-popup-session {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: rgba(255,255,255,0.85);
+  font-family: 'Cascadia Code', 'Consolas', monospace;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: calc(100% - 40px);
+  text-align: center;
+}
+
+.remote-popup-close-btn {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  background: transparent;
+  border: none;
+  color: rgba(255,255,255,0.35);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  transition: color 0.15s, background 0.15s;
+}
+
+.remote-popup-close-btn:hover {
+  color: rgba(255,255,255,0.9);
+  background: rgba(255,255,255,0.08);
+}
+
+.remote-popup-grid {
+  display: flex;
+  gap: 8px;
+}
+
+.remote-popup-card {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 14px 10px;
+  border-radius: 9px;
+  border: 1px solid rgba(255,255,255,0.1);
+  background: rgba(255,255,255,0.03);
+  color: rgba(255,255,255,0.85);
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.remote-popup-card:hover:not(:disabled) {
+  background: rgba(110,170,255,0.1);
+  border-color: rgba(110,170,255,0.4);
+}
+
+.remote-popup-card.is-disabled,
+.remote-popup-card:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+  color: rgba(255,255,255,0.4);
+}
+
+.remote-popup-card-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: inherit;
+  margin-top: 2px;
+}
+
+.remote-popup-card-hint {
+  font-size: 10px;
+  color: rgba(255,255,255,0.4);
+  letter-spacing: 0.02em;
+}
+
+.remote-popup-qr {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+
+.remote-popup-qr-frame {
+  background: #ffffff;
+  padding: 8px;
+  border-radius: 8px;
+  line-height: 0;
+}
+
+.remote-popup-qr-caption {
+  font-size: 11px;
+  color: rgba(255,255,255,0.55);
+  text-align: center;
+  line-height: 1.5;
+}
+
+.remote-popup-qr-caption code {
+  font-family: 'Cascadia Code', 'Consolas', monospace;
+  font-size: 10.5px;
+  color: rgba(110,170,255,0.85);
+  background: rgba(110,170,255,0.08);
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+
+.remote-popup-mirror-note {
+  font-size: 10.5px;
+  color: rgba(255,255,255,0.38);
+  font-style: italic;
+}
+
+.remote-popup-busy {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 0;
+}
+
+.remote-popup-busy-text {
+  font-size: 11.5px;
+  color: rgba(255,255,255,0.7);
+  text-align: center;
+  line-height: 1.5;
+}
+
+.remote-popup-actions {
+  display: flex;
+  gap: 6px;
+  width: 100%;
+  margin-top: 4px;
+}
+
+.remote-popup-btn {
+  flex: 1;
+  height: 28px;
+  border-radius: 7px;
+  font-family: inherit;
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.15s, background 0.15s, border-color 0.15s;
+}
+
+.remote-popup-btn.ghost {
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.12);
+  color: rgba(255,255,255,0.65);
+}
+
+.remote-popup-btn.ghost:hover {
+  background: rgba(255,255,255,0.08);
+  color: rgba(255,255,255,0.9);
+}
+
+.remote-popup-btn.primary {
+  background: rgba(110,170,255,0.85);
+  border: 1px solid rgba(110,170,255,0.6);
+  color: #06101e;
+}
+
+.remote-popup-btn.primary:hover { opacity: 0.9; }

@@ -1,0 +1,296 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
+import { App } from '../src/renderer/src/App'
+
+class AppTests {
+  static resetBridge(): void {
+    vi.mocked(window.ccc.setIgnoreMouseEvents).mockReset()
+    vi.mocked(window.ccc.openFolderDialog).mockReset()
+    vi.mocked(window.ccc.launchSession).mockReset()
+    vi.mocked(window.ccc.killSession).mockReset()
+    vi.mocked(window.ccc.apiProviderList).mockReset()
+    vi.mocked(window.ccc.listKnownSessions).mockReset()
+    vi.mocked(window.ccc.codexCliLaunch).mockReset()
+    vi.mocked(window.ccc.claudeCliDetect).mockReset()
+    vi.mocked(window.ccc.codexCliDetect).mockReset()
+    vi.mocked(window.ccc.injectConsoleText).mockReset()
+    vi.mocked(window.ccc.codexCliSelectModel).mockReset()
+    vi.mocked(window.ccc.focusSession).mockReset()
+    vi.mocked(window.ccc.onSessionClosed).mockReset()
+    vi.mocked(window.ccc.openFolderDialog).mockResolvedValue('/tmp/workspace-a')
+    vi.mocked(window.ccc.launchSession).mockResolvedValue({ sessionId: 11 })
+    vi.mocked(window.ccc.apiProviderList).mockResolvedValue([])
+    vi.mocked(window.ccc.listKnownSessions).mockResolvedValue([])
+    vi.mocked(window.ccc.codexCliLaunch).mockResolvedValue({ ok: true, sessionId: 22 })
+    vi.mocked(window.ccc.injectConsoleText).mockReturnValue(undefined)
+    vi.mocked(window.ccc.codexCliSelectModel).mockReturnValue(undefined)
+    vi.mocked(window.ccc.focusSession).mockReturnValue(undefined)
+    vi.mocked(window.ccc.claudeCliDetect).mockResolvedValue({ installed: true, loggedIn: true, account: null, version: 'Claude Code' })
+    vi.mocked(window.ccc.codexCliDetect).mockResolvedValue({
+      installed: true,
+      loggedIn: false,
+      email: null,
+      models: [{ id: 'gpt-5.4', label: 'gpt-5.4' }],
+    })
+    vi.mocked(window.ccc.onSessionClosed).mockReturnValue(() => {})
+  }
+
+  static openExpandedPanel(): void {
+    fireEvent.click(document.querySelector('.island')!)
+  }
+
+  static run(): void {
+    describe('App', () => {
+      beforeEach(() => {
+        AppTests.resetBridge()
+      })
+
+      it('keeps the pill clickable when CCC collapses under the pointer', async () => {
+        render(<App />)
+        await waitFor(() => {
+          expect(window.ccc.apiProviderList).toHaveBeenCalledWith()
+          expect(window.ccc.claudeCliDetect).toHaveBeenCalledWith()
+          expect(window.ccc.codexCliDetect).toHaveBeenCalledWith()
+        })
+        const wrapper = document.querySelector('.island-wrapper')!
+        const island = document.querySelector('.island')!
+
+        fireEvent.mouseEnter(wrapper)
+        expect(window.ccc.setIgnoreMouseEvents).toHaveBeenLastCalledWith(false)
+
+        fireEvent.click(island)
+        fireEvent.click(island)
+
+        expect(window.ccc.setIgnoreMouseEvents).toHaveBeenLastCalledWith(false)
+
+        fireEvent.click(island)
+
+        expect(window.ccc.setIgnoreMouseEvents).toHaveBeenLastCalledWith(false)
+      })
+
+      it('restores mouse passthrough when Stop All clears sessions', async () => {
+        vi.mocked(window.ccc.codexCliDetect).mockResolvedValue({ installed: false, loggedIn: false, email: null, models: [] })
+        render(<App />)
+        await waitFor(() => expect(window.ccc.codexCliDetect).toHaveBeenCalledWith())
+
+        AppTests.openExpandedPanel()
+        fireEvent.click(await screen.findByText('New Session'))
+        await waitFor(() => expect(window.ccc.launchSession).toHaveBeenCalledWith('/tmp/workspace-a', ''))
+
+        fireEvent.mouseMove(document.querySelector('.island-wrapper')!, { clientX: 999, clientY: 999 })
+        expect(window.ccc.setIgnoreMouseEvents).toHaveBeenLastCalledWith(false)
+
+        fireEvent.click(screen.getByText('Stop All'))
+
+        expect(window.ccc.killSession).toHaveBeenCalledWith(11)
+        expect(window.ccc.setIgnoreMouseEvents).toHaveBeenLastCalledWith(true)
+        expect(screen.queryByText('workspace-a')).toBeNull()
+      })
+
+      it('restores mouse passthrough when the app window loses focus', async () => {
+        render(<App />)
+        await waitFor(() => expect(window.ccc.codexCliDetect).toHaveBeenCalledWith())
+
+        window.dispatchEvent(new Event('blur'))
+
+        expect(window.ccc.setIgnoreMouseEvents).toHaveBeenLastCalledWith(true)
+      })
+
+      it('keeps CCC clickable after switching sessions while the pointer stays inside', async () => {
+        vi.mocked(window.ccc.codexCliDetect).mockResolvedValue({ installed: false, loggedIn: false, email: null, models: [] })
+        vi.mocked(window.ccc.openFolderDialog)
+          .mockResolvedValueOnce('/tmp/one')
+          .mockResolvedValueOnce('/tmp/two')
+          .mockResolvedValueOnce('/tmp/three')
+        vi.mocked(window.ccc.launchSession)
+          .mockResolvedValueOnce({ sessionId: 1 })
+          .mockResolvedValueOnce({ sessionId: 2 })
+          .mockResolvedValueOnce({ sessionId: 3 })
+
+        render(<App />)
+        await waitFor(() => expect(window.ccc.codexCliDetect).toHaveBeenCalledWith())
+        AppTests.openExpandedPanel()
+        fireEvent.click(await screen.findByText('New Session'))
+        await waitFor(() => expect(window.ccc.launchSession).toHaveBeenCalledWith('/tmp/one', ''))
+        fireEvent.click(screen.getByText('New Session'))
+        await waitFor(() => expect(window.ccc.launchSession).toHaveBeenCalledWith('/tmp/two', ''))
+
+        fireEvent.mouseEnter(document.querySelector('.island-wrapper')!)
+        expect(window.ccc.setIgnoreMouseEvents).toHaveBeenLastCalledWith(false)
+
+        fireEvent.click(screen.getByText('one'))
+        window.dispatchEvent(new Event('blur'))
+
+        expect(window.ccc.focusSession).toHaveBeenCalledWith(1)
+        expect(window.ccc.setIgnoreMouseEvents).toHaveBeenLastCalledWith(false)
+
+        fireEvent.click(screen.getByText('New Session'))
+
+        await waitFor(() => expect(window.ccc.launchSession).toHaveBeenCalledWith('/tmp/three', ''))
+      })
+
+      it('restores mouse passthrough after an outside click collapses CCC', async () => {
+        render(<App />)
+        await waitFor(() => expect(window.ccc.codexCliDetect).toHaveBeenCalledWith())
+
+        AppTests.openExpandedPanel()
+        await waitFor(() => expect(window.ccc.setIgnoreMouseEvents).toHaveBeenLastCalledWith(false))
+
+        fireEvent.mouseDown(document.body, { clientX: 999, clientY: 999 })
+
+        expect(window.ccc.setIgnoreMouseEvents).toHaveBeenLastCalledWith(true)
+      })
+
+      it('restores mouse passthrough after canceling an API switch popup', async () => {
+        vi.mocked(window.ccc.codexCliDetect).mockResolvedValue({ installed: false, loggedIn: false, email: null, models: [] })
+        vi.mocked(window.ccc.apiProviderList).mockResolvedValue([
+          { id: 'deepseek', modelId: 'deepseek-v4-flash', hasKey: true, verified: true },
+        ])
+        render(<App />)
+        await waitFor(() => expect(window.ccc.codexCliDetect).toHaveBeenCalledWith())
+
+        AppTests.openExpandedPanel()
+        fireEvent.click(await screen.findByText('New Session'))
+        await waitFor(() => expect(window.ccc.launchSession).toHaveBeenCalledWith('/tmp/workspace-a', ''))
+
+        fireEvent.mouseEnter(document.querySelector('.island-wrapper')!)
+        fireEvent.click(document.querySelector('.island-pill')!)
+        expect(window.ccc.setIgnoreMouseEvents).toHaveBeenLastCalledWith(false)
+
+        fireEvent.mouseMove(document.querySelector('.island-wrapper')!)
+
+        fireEvent.click(document.querySelector('.model-name-btn')!)
+        fireEvent.click(await screen.findByRole('button', { name: /deepseek-v4-flash/i }))
+        expect(await screen.findByRole('dialog', { name: 'Switch to API model' })).toBeDefined()
+        expect(window.ccc.setIgnoreMouseEvents).toHaveBeenLastCalledWith(false)
+
+        const dismissApiSwitch = screen.getByLabelText('Dismiss notification')
+        fireEvent.mouseDown(dismissApiSwitch, { clientX: 999, clientY: 999 })
+        fireEvent.click(dismissApiSwitch)
+
+        expect(window.ccc.setIgnoreMouseEvents).toHaveBeenLastCalledWith(true)
+      })
+
+      it('restores mouse passthrough after canceling the new-session engine popup', async () => {
+        render(<App />)
+        await waitFor(() => expect(window.ccc.codexCliDetect).toHaveBeenCalledWith())
+
+        AppTests.openExpandedPanel()
+        fireEvent.click(await screen.findByText('New Session'))
+        expect(await screen.findByRole('dialog', { name: 'New Session' })).toBeDefined()
+
+        fireEvent.mouseEnter(document.querySelector('.island-wrapper')!)
+        expect(window.ccc.setIgnoreMouseEvents).toHaveBeenLastCalledWith(false)
+
+        const dismissEnginePicker = screen.getByLabelText('Dismiss notification')
+        fireEvent.mouseDown(dismissEnginePicker, { clientX: 999, clientY: 999 })
+        fireEvent.click(dismissEnginePicker)
+
+        expect(window.ccc.setIgnoreMouseEvents).toHaveBeenLastCalledWith(true)
+      })
+
+      it('shows an engine picker for new sessions when Claude and Codex are available', async () => {
+        render(<App />)
+        AppTests.openExpandedPanel()
+        fireEvent.click(await screen.findByText('New Session'))
+
+        expect(await screen.findByRole('dialog', { name: 'New Session' })).toBeDefined()
+        expect(screen.getByText('Claude Code CLI')).toBeDefined()
+        expect(screen.getByText('Codex CLI')).toBeDefined()
+      })
+
+      it('shows the engine picker without waiting for another CLI detect after folder selection', async () => {
+        vi.mocked(window.ccc.claudeCliDetect).mockImplementation(() => new Promise(() => {}))
+        vi.mocked(window.ccc.codexCliDetect).mockImplementation(() => new Promise(() => {}))
+
+        render(<App />)
+        AppTests.openExpandedPanel()
+        const claudeDetectCalls = vi.mocked(window.ccc.claudeCliDetect).mock.calls.length
+        const codexDetectCalls = vi.mocked(window.ccc.codexCliDetect).mock.calls.length
+        fireEvent.click(await screen.findByText('New Session'))
+
+        expect(await screen.findByRole('dialog', { name: 'New Session' })).toBeDefined()
+        expect(window.ccc.claudeCliDetect).toHaveBeenCalledTimes(claudeDetectCalls)
+        expect(window.ccc.codexCliDetect).toHaveBeenCalledTimes(codexDetectCalls)
+      })
+
+      it('launches Codex from the engine picker without starting Claude', async () => {
+        render(<App />)
+        AppTests.openExpandedPanel()
+        fireEvent.click(await screen.findByText('New Session'))
+        fireEvent.click(await screen.findByText('Codex CLI'))
+
+        await waitFor(() => {
+          expect(window.ccc.codexCliLaunch).toHaveBeenCalledWith('/tmp/workspace-a', 'gpt-5.4')
+        })
+        expect(window.ccc.launchSession).not.toHaveBeenCalled()
+      })
+
+      it('switches a Codex session model via /model after choosing reasoning effort', async () => {
+        vi.mocked(window.ccc.codexCliDetect).mockResolvedValue({
+          installed: true,
+          loggedIn: true,
+          email: null,
+          defaultModelId: 'gpt-5.4',
+          models: [
+            { id: 'gpt-5.5', label: 'gpt-5.5' },
+            { id: 'gpt-5.4', label: 'gpt-5.4' },
+            { id: 'gpt-5.4-mini', label: 'gpt-5.4-mini' },
+          ],
+        })
+
+        render(<App />)
+        AppTests.openExpandedPanel()
+        fireEvent.click(await screen.findByText('New Session'))
+        fireEvent.click(await screen.findByText('Codex CLI'))
+
+        await waitFor(() => {
+          expect(window.ccc.codexCliLaunch).toHaveBeenCalledWith('/tmp/workspace-a', 'gpt-5.4')
+        })
+
+        fireEvent.click(await screen.findByRole('button', { name: /gpt-5\.4/i }))
+        fireEvent.click(await screen.findByText('gpt-5.4-mini'))
+
+        expect(await screen.findByRole('dialog', { name: 'Switch Codex Model' })).toBeDefined()
+        fireEvent.click(screen.getByRole('radio', { name: 'High' }))
+
+        expect(window.ccc.codexCliSelectModel).toHaveBeenCalledWith(22, 3, 'high')
+        expect(window.ccc.injectConsoleText).not.toHaveBeenCalledWith(22, '/model gpt-5.4-mini high')
+        expect(window.ccc.codexCliLaunch).toHaveBeenCalledTimes(1)
+      })
+
+      it('keeps the active session while showing a popup for a background close', async () => {
+        const closedHandlers: Array<(id: number) => void> = []
+        vi.mocked(window.ccc.onSessionClosed).mockImplementation(cb => {
+          closedHandlers.push(cb)
+          return () => {}
+        })
+        vi.mocked(window.ccc.codexCliDetect).mockResolvedValue({ installed: false, loggedIn: false, email: null, models: [] })
+        vi.mocked(window.ccc.openFolderDialog)
+          .mockResolvedValueOnce('/tmp/one')
+          .mockResolvedValueOnce('/tmp/two')
+        vi.mocked(window.ccc.launchSession)
+          .mockResolvedValueOnce({ sessionId: 1 })
+          .mockResolvedValueOnce({ sessionId: 2 })
+
+        render(<App />)
+        await waitFor(() => expect(window.ccc.codexCliDetect).toHaveBeenCalled())
+        AppTests.openExpandedPanel()
+        fireEvent.click(await screen.findByText('New Session'))
+        await waitFor(() => expect(window.ccc.launchSession).toHaveBeenCalledWith('/tmp/one', ''))
+        fireEvent.click(screen.getByText('New Session'))
+        await waitFor(() => expect(window.ccc.launchSession).toHaveBeenCalledWith('/tmp/two', ''))
+
+        const closed = closedHandlers[closedHandlers.length - 1]
+        if (!closed) throw new Error('session close listener was not registered')
+        act(() => { closed(1) })
+
+        expect(await screen.findByText(/Claude · one\//)).toBeDefined()
+        expect(screen.getByText('two')).toBeDefined()
+      })
+
+    })
+  }
+}
+
+AppTests.run()

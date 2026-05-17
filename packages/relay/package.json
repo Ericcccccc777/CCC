@@ -1,0 +1,10 @@
+{
+  "name": "@ccc/relay",
+  "version": "0.1.0",
+  "description": "WebSocket relay — bridges Claude Code CLI sessions to the Electron UI (Step 2)",
+  "private": true,
+  "scripts": {
+    "dev": "echo 'relay not yet implemented (Step 2)'",
+    "build": "echo 'relay not yet implemented (Step 2)'"
+  }
+}

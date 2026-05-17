@@ -1,0 +1,47 @@
+export const IPC = {
+  SET_IGNORE_MOUSE:        'set-ignore-mouse-events',
+  OPEN_FOLDER_DIALOG:      'open-folder-dialog',
+  LAUNCH_SESSION:          'launch-session',
+  KILL_SESSION:            'kill-session',
+  SESSION_CLOSED:          'session-closed',
+  SESSION_STATE_CHANGED:   'session-state-changed',
+  SESSION_METRICS_UPDATED: 'session-metrics-updated',
+  HOOK_DECISION:           'hook-decision',
+  ALLOW_TOOL_ALWAYS:       'ccc:allow-tool-always',
+  SWITCH_SESSION_MODEL:    'ccc:switch-session-model',
+  INJECT_CONSOLE_TEXT:     'ccc:inject-console-text',
+  SESSION_FOCUS:           'ccc:session-focus',
+  SESSION_RESTORED:        'ccc:session-restored',
+  SESSION_LIST_KNOWN:      'ccc:session-list-known',
+  MAIN_SET_HEIGHT:         'ccc:main-set-height',
+  // Remote mirror
+  REMOTE_MIRROR_URL:       'remote:mirror-url',
+  // Platform capabilities (renderer probes for accessibility-permission UI etc.)
+  PLATFORM_GET_CAPABILITIES:        'platform:get-capabilities',
+  OPEN_ACCESSIBILITY_SETTINGS:      'platform:open-accessibility-settings',
+  // API providers (DeepSeek + future Anthropic-compatible endpoints)
+  API_PROVIDER_LIST:                'api-provider:list',
+  API_PROVIDER_SAVE:                'api-provider:save',
+  API_PROVIDER_SET_MODEL:           'api-provider:set-model',
+  API_PROVIDER_REMOVE:              'api-provider:remove',
+  API_PROVIDER_TEST:                'api-provider:test',
+  // Session-level API mode (Chunk C — Restart in place)
+  API_SESSION_RESTART:              'api-session:restart',
+  API_SESSION_SWITCHED:             'api-session:switched',
+  // Session-level API mode (Chunk D — New session, no restart)
+  API_SESSION_LAUNCH_NEW:           'api-session:launch-new',
+  // Chunk E — runtime usage / balance broadcasts (main → renderer)
+  API_BALANCE_UPDATE:               'api-session:balance-update',
+  API_USAGE_UPDATE:                 'api-session:usage-update',
+  // Claude Code CLI — user-managed binary detected from Settings → CLI.
+  // *_DETECT returns the cached snapshot (60 s TTL) so the pill expand path
+  // never spawns a subprocess on the click. *_REDETECT bypasses the cache
+  // for Settings → "Check Again". See STABILITY_RULES.md §2.1.
+  CLAUDE_CLI_DETECT:                'claude-cli:detect',
+  CLAUDE_CLI_REDETECT:              'claude-cli:redetect',
+  // Codex CLI — standalone session engine (spawns `codex` binary, not `claude`)
+  CODEX_CLI_DETECT:                 'codex-cli:detect',
+  CODEX_CLI_REDETECT:               'codex-cli:redetect',
+  CODEX_CLI_LAUNCH:                 'codex-cli:launch',
+  CODEX_CLI_SELECT_MODEL:           'codex-cli:select-model',
+} as const

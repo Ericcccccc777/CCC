@@ -1,0 +1,10 @@
+{
+  "name": "@ccc/cli",
+  "version": "0.1.0",
+  "description": "CCC command-line entry point — registers the 'ccc' command on PATH (Step 2)",
+  "private": true,
+  "scripts": {
+    "dev": "echo 'cli not yet implemented (Step 2)'",
+    "build": "echo 'cli not yet implemented (Step 2)'"
+  }
+}

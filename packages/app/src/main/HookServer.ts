@@ -1,0 +1,357 @@
+import * as http from 'http'
+import { AddressInfo } from 'net'
+import { BrowserWindow, ipcMain } from 'electron'
+import { statSync, openSync, readSync, closeSync } from 'fs'
+import { IPC } from '../shared/ipc-channels'
+import type { SessionStateUpdate, ToolPermission, SessionMetricsUpdate } from '../shared/session-state'
+import type { MirrorServer } from './MirrorServer'
+
+interface Pending {
+  res:       http.ServerResponse
+  timer:     ReturnType<typeof setTimeout>
+  sessionId: number
+}
+
+interface TranscriptEntry {
+  path:   string
+  offset: number
+  timer:  ReturnType<typeof setInterval>
+}
+
+export class HookServer {
+  private server          = http.createServer((req, res) => this.handleRequest(req, res))
+  private port            = 0
+  private pendingHooks    = new Map<string, Pending>()
+  private transcripts     = new Map<number, TranscriptEntry>()
+  private alwaysAllowed   = new Map<number, Set<string>>()
+  private lastDoneAt      = new Map<number, number>()
+  // Sessions whose AskUserQuestion popup timed out without a renderer answer.
+  // Claude Code is now rendering the question in the terminal and waiting on
+  // user input there. Until the next Stop event, transcript→streaming is
+  // suppressed so the island icon stays as `?` (matches the actual lifecycle:
+  // Claude is still waiting for the user to make a choice). Cleared on Stop,
+  // session teardown, and server shutdown.
+  private terminalAwaiting = new Set<number>()
+  private mirror:         MirrorServer | null = null
+  private win:            BrowserWindow | null = null
+  private readonly preToolUseTimeoutMs: number
+  // ApiUsageManager subscribes to every parsed transcript line so it can
+  // pull `usage.*` off API-mode assistant messages. Set via setTranscriptSink;
+  // null means no consumer (Anthropic-only run).
+  private transcriptSink: ((sessionId: number, parsed: Record<string, unknown>) => void) | null = null
+
+  constructor(preToolUseTimeoutMs = 30_000) {
+    this.preToolUseTimeoutMs = preToolUseTimeoutMs
+  }
+
+  setMirrorServer(m: MirrorServer): void { this.mirror = m }
+
+  setTranscriptSink(sink: (sessionId: number, parsed: Record<string, unknown>) => void): void {
+    this.transcriptSink = sink
+  }
+
+  mirrorUrl(sessionId: number): string {
+    return this.mirror?.getMirrorUrl(sessionId) ?? ''
+  }
+
+  allowToolAlways(sessionId: number, tool: string): void {
+    let set = this.alwaysAllowed.get(sessionId)
+    if (!set) { set = new Set(); this.alwaysAllowed.set(sessionId, set) }
+    set.add(tool)
+  }
+
+  start(): Promise<number> {
+    return new Promise(resolve => {
+      this.server.listen(0, '127.0.0.1', () => {
+        this.port = (this.server.address() as AddressInfo).port
+        resolve(this.port)
+      })
+    })
+  }
+
+  attachWindow(win: BrowserWindow): void {
+    this.win = win
+    ipcMain.on(IPC.HOOK_DECISION, (_e, hookKey: string, exitCode: number) => {
+      const pending = this.pendingHooks.get(hookKey)
+      if (!pending) return
+      clearTimeout(pending.timer)
+      this.pendingHooks.delete(hookKey)
+      this.reply(pending.res, { exitCode })
+    })
+
+    ipcMain.on(IPC.ALLOW_TOOL_ALWAYS, (_e, sessionId: number, tool: string) => {
+      this.allowToolAlways(sessionId, tool)
+    })
+  }
+
+  stop(): void {
+    for (const [, p] of this.pendingHooks) {
+      clearTimeout(p.timer)
+      this.reply(p.res, { exitCode: 0 })
+    }
+    this.pendingHooks.clear()
+    for (const [, t] of this.transcripts) clearInterval(t.timer)
+    this.transcripts.clear()
+    this.alwaysAllowed.clear()
+    this.lastDoneAt.clear()
+    this.terminalAwaiting.clear()
+    this.mirror?.stop()
+    this.mirror = null
+    this.server.close()
+    ipcMain.removeAllListeners(IPC.HOOK_DECISION)
+    ipcMain.removeAllListeners(IPC.ALLOW_TOOL_ALWAYS)
+  }
+
+  stopTranscript(sessionId: number): void {
+    const t = this.transcripts.get(sessionId)
+    if (!t) return
+    clearInterval(t.timer)
+    this.transcripts.delete(sessionId)
+    this.lastDoneAt.delete(sessionId)
+    this.terminalAwaiting.delete(sessionId)
+    this.mirror?.unregisterSession(sessionId)
+  }
+
+  get serverPort(): number { return this.port }
+
+  private reply(res: http.ServerResponse, body: unknown): void {
+    res.writeHead(200, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify(body))
+  }
+
+  private handleRequest(req: http.IncomingMessage, res: http.ServerResponse): void {
+    if (req.method !== 'POST') { res.writeHead(404); res.end(); return }
+    let body = ''
+    req.on('data', (chunk: Buffer) => { body += chunk.toString() })
+    req.on('end', () => {
+      try {
+        const parsed = JSON.parse(body)
+        if (req.url === '/hook') {
+          this.dispatch(parsed as {
+            sessionId: number; event: string
+            tool?: string; toolInput?: unknown; message?: string
+          }, res)
+        } else if (req.url === '/statusline') {
+          this.handleStatusLine(parsed as { sessionId: number; data: Record<string, unknown> }, res)
+        } else {
+          res.writeHead(404); res.end()
+        }
+      } catch { res.writeHead(400); res.end() }
+    })
+  }
+
+  private handleStatusLine(p: { sessionId: number; data: Record<string, unknown> }, res: http.ServerResponse): void {
+    this.reply(res, {})
+    const { sessionId, data } = p
+    if (!data || typeof data !== 'object') return
+
+    const modelObj = data['model'] as { id?: string; display_name?: string } | undefined
+    const model    = modelObj?.display_name ?? modelObj?.id
+
+    const cw       = data['context_window'] as { used_percentage?: number } | undefined
+    const contextPct = typeof cw?.used_percentage === 'number' ? cw.used_percentage / 100 : undefined
+
+    const rl = data['rate_limits'] as Record<string, unknown> | undefined
+    const fiveHour = rl?.['five_hour'] as Record<string, unknown> | undefined
+    const sevenDay = rl?.['seven_day'] as Record<string, unknown> | undefined
+    const pct = (b: Record<string, unknown> | undefined): number | undefined => {
+      const v = b?.['used_percentage']
+      return typeof v === 'number' ? v / 100 : undefined
+    }
+    const usagePct5h = pct(fiveHour)
+    const usagePct7d = pct(sevenDay)
+    // resets-at parser. Claude Code's statusLine emits
+    //   { rate_limits: { five_hour: { resets_at: <unix-seconds>, ... }, ... } }
+    // (verified 2026-05-09 against the user's running CLI). We've also seen
+    // older / hypothetical builds use ISO strings or relative seconds, so
+    // the parser is broadened to accept any of:
+    //   - number  → Unix seconds (< 1e11) or ms (>= 1e11), discriminated by
+    //               magnitude (1e11 ms ≈ 1973-03; 1e11 s ≈ year 5138)
+    //   - string  → ISO 8601 via Date.parse
+    //   - companion keys for unambiguous formats (reset_at_unix_ms, reset_in_seconds)
+    const parseReset = (b: Record<string, unknown> | undefined): number | undefined => {
+      if (!b) return undefined
+      for (const k of ['resets_at', 'reset_at', 'reset_time', 'resetsAt']) {
+        const v = b[k]
+        if (typeof v === 'number' && Number.isFinite(v)) {
+          return v < 1e11 ? v * 1000 : v
+        }
+        if (typeof v === 'string') {
+          const ms = Date.parse(v)
+          if (Number.isFinite(ms)) return ms
+        }
+      }
+      for (const k of ['reset_at_unix_ms', 'reset_at_ms', 'resets_at_ms']) {
+        const v = b[k]
+        if (typeof v === 'number' && Number.isFinite(v)) return v
+      }
+      for (const k of ['reset_in_seconds', 'resets_in_seconds', 'reset_in']) {
+        const v = b[k]
+        if (typeof v === 'number' && Number.isFinite(v)) return Date.now() + v * 1000
+      }
+      return undefined
+    }
+    const reset5hAt = parseReset(fiveHour)
+    const reset7dAt = parseReset(sevenDay)
+
+    const metrics: SessionMetricsUpdate = {
+      sessionId, model, contextPct, usagePct5h, usagePct7d, reset5hAt, reset7dAt,
+    }
+    this.win?.webContents.send(IPC.SESSION_METRICS_UPDATED, metrics)
+
+    const transcriptPath = typeof data['transcript_path'] === 'string' ? data['transcript_path'] : null
+    if (transcriptPath && !this.transcripts.has(sessionId)) {
+      this.startTranscriptWatch(sessionId, transcriptPath)
+      this.mirror?.registerSession(sessionId, transcriptPath)
+    }
+  }
+
+  private startTranscriptWatch(sessionId: number, path: string): void {
+    const entry: TranscriptEntry = { path, offset: 0, timer: null as unknown as ReturnType<typeof setInterval> }
+    let synced = false
+    try { entry.offset = statSync(path).size; synced = true } catch { /* not created yet */ }
+
+    // 2 s polling: STABILITY_RULES.md §2.3 bans sub-2 s sync-statSync loops.
+    // The visible cost of this latency is a ≤ 2 s delay before the island
+    // icon flips from `done` back to `streaming` when Claude resumes output.
+    // The user cannot perceive that delay; the previous 800 ms cadence was
+    // sustained syscall pressure (~7 sc/sec at 6 sessions) for no UX win.
+    entry.timer = setInterval(() => {
+      try {
+        const stat = statSync(entry.path)
+        if (!synced) {
+          // File just appeared — skip all existing content, only watch new writes
+          entry.offset = stat.size
+          synced = true
+          return
+        }
+        if (stat.size <= entry.offset) return
+        const fd  = openSync(entry.path, 'r')
+        const buf = Buffer.alloc(stat.size - entry.offset)
+        readSync(fd, buf, 0, buf.length, entry.offset)
+        closeSync(fd)
+        entry.offset = stat.size
+
+        for (const line of buf.toString('utf8').split('\n')) {
+          const t = line.trim()
+          if (!t) continue
+          this.processTranscriptLine(sessionId, t)
+        }
+      } catch { /* file gone */ }
+    }, 2000)
+
+    this.transcripts.set(sessionId, entry)
+  }
+
+  // Extracted from startTranscriptWatch's setInterval closure so it can be
+  // exercised by unit tests without spinning up real fs polling. `line` must
+  // already be a non-empty trimmed JSONL row.
+  private processTranscriptLine(sessionId: number, line: string): void {
+    let obj: Record<string, unknown>
+    try { obj = JSON.parse(line) as Record<string, unknown> } catch { return }
+    // Forward every parsed line to ApiUsageManager (no-op for Anthropic
+    // sessions; ApiUsageManager filters by registered sessionId). The sink
+    // never throws — even if it did we want to keep the lifecycle logic
+    // below running, so we wrap defensively.
+    if (this.transcriptSink) {
+      try { this.transcriptSink(sessionId, obj) } catch { /* never block lifecycle on sink errors */ }
+    }
+    const msg = obj['message'] as Record<string, unknown> | undefined
+
+    // user-role messages cover the human's terminal input AND tool_result
+    // entries written back when a tool finishes. Their arrival means the
+    // user has interacted with the terminal — clear terminalAwaiting so the
+    // *next* assistant message can flip to streaming naturally.
+    const isUser =
+      obj['type'] === 'user' ||
+      msg?.['role'] === 'user'
+    if (isUser) {
+      this.terminalAwaiting.delete(sessionId)
+      return
+    }
+
+    const isAssistant =
+      obj['type'] === 'assistant' ||
+      msg?.['role'] === 'assistant'
+    if (!isAssistant) return
+
+    // Suppress transcript→streaming when:
+    //   (a) A PreToolUse hook is currently pending for this session — the
+    //       assistant line we just saw is Claude's record of the tool_use
+    //       call we're holding, not actual streaming. Without this, the
+    //       popup gets clobbered ~800ms after appearing (visible bug:
+    //       "popup flashes once and disappears").
+    //   (b) AskUserQuestion popup timed out and Claude is now awaiting
+    //       user input in the terminal — keep icon `?` until the user
+    //       interacts (which arrives as the user-msg branch above).
+    //   (c) Within 2s of a Stop event — prevents transcript watcher from
+    //       overriding 'done' after model switch.
+    const hasPendingHook = [...this.pendingHooks.values()]
+      .some(p => p.sessionId === sessionId)
+    if (hasPendingHook) return
+    if (this.terminalAwaiting.has(sessionId)) return
+    const lastDone = this.lastDoneAt.get(sessionId) ?? 0
+    if (Date.now() - lastDone > 2000) {
+      this.sendState({ sessionId, state: 'streaming' })
+    }
+  }
+
+  private dispatch(
+    p: { sessionId: number; event: string; tool?: string; toolInput?: unknown; message?: string },
+    res: http.ServerResponse,
+  ): void {
+    if (p.event === 'pretooluse') {
+      const tool = p.tool ?? 'unknown'
+      if (this.alwaysAllowed.get(p.sessionId)?.has(tool)) {
+        this.reply(res, { exitCode: 0 })
+        this.sendState({ sessionId: p.sessionId, state: 'streaming' })
+        return
+      }
+      const hookKey = `ptu-${p.sessionId}-${Date.now()}`
+      const timer   = setTimeout(() => {
+        this.pendingHooks.delete(hookKey)
+        this.reply(res, { exitCode: 0 })
+        if (tool === 'AskUserQuestion') {
+          // Tool will now run and render its own picker in the terminal,
+          // waiting for user input there. Keep the icon in `waiting` (clear
+          // the popup but don't flip to streaming) and suppress
+          // transcript→streaming until the next Stop event.
+          this.terminalAwaiting.add(p.sessionId)
+          this.sendState({ sessionId: p.sessionId, state: 'waiting' })
+        } else {
+          this.sendState({ sessionId: p.sessionId, state: 'streaming' })
+        }
+      }, this.preToolUseTimeoutMs)
+      this.pendingHooks.set(hookKey, { res, timer, sessionId: p.sessionId })
+      const permission: ToolPermission = {
+        hookKey, tool, toolInput: p.toolInput ?? {},
+      }
+      this.sendState({ sessionId: p.sessionId, state: 'waiting', permission })
+    } else {
+      this.reply(res, { exitCode: 0 })
+      if (p.event === 'stop') {
+        this.lastDoneAt.set(p.sessionId, Date.now())
+        this.terminalAwaiting.delete(p.sessionId)
+        this.sendState({ sessionId: p.sessionId, state: 'done' })
+      } else if (p.event === 'notification') {
+        // Notification hooks fire for things like 60-second idle reminders
+        // and "Claude needs your attention" — they must NOT flip lifecycle
+        // back to streaming. Carry the message only; preserve current state.
+        // Suppress the redundant "waiting for input" idle nudge — the
+        // pill's `?` icon already signals exactly this state, the popup
+        // adds nothing and the user explicitly asked it removed twice.
+        const msg = (p.message ?? '').toLowerCase()
+        const isIdleNudge = msg.includes('waiting for your input')
+                         || msg.includes('waiting for you input')
+                         || msg.includes('waiting for input')
+        if (!isIdleNudge) {
+          this.sendState({ sessionId: p.sessionId, message: p.message })
+        }
+      }
+    }
+  }
+
+  private sendState(update: SessionStateUpdate): void {
+    this.win?.webContents.send(IPC.SESSION_STATE_CHANGED, update)
+  }
+}
