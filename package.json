@@ -1,0 +1,20 @@
+{
+  "name": "ccc",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Dynamic Island overlay for Claude Code CLI sessions on Windows",
+  "scripts": {
+    "dev": "pnpm --filter @ccc/app dev",
+    "build": "pnpm --filter @ccc/app build",
+    "package": "pnpm --filter @ccc/app package",
+    "test": "pnpm --filter @ccc/app test",
+    "lint": "pnpm --filter @ccc/app lint"
+  },
+  "engines": {
+    "node": ">=20",
+    "pnpm": ">=9"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": ["electron", "esbuild"]
+  }
+}
