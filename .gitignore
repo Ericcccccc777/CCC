@@ -1,13 +1,31 @@
-# Local-only Claude config — never upload
-CLAUDE.local.md
-.claude/
-
-# OS
-.DS_Store
-
 # Dependencies
 node_modules/
 
-# Build artifacts
-packages/*/dist/
-packages/*/out/
+# Build artefacts
+packages/app/out/
+packages/app/dist/
+
+# Logs
+*.log
+
+# OS detritus
+.DS_Store
+Thumbs.db
+
+# Local env / secrets
+.env
+.env.local
+
+# Local Claude Code per-machine state
+.claude/settings.json
+.claude/settings.local.json
+CLAUDE.local.md
+
+# Local-only files
+example/
+Claude Code Controller.html
+CCC.html
+repo-B/
+
+# npm artifacts — pnpm-lock.yaml is the canonical lockfile
+package-lock.json

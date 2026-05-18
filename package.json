@@ -1,6 +1,6 @@
 {
   "name": "ccc",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "Dynamic Island overlay for Claude Code CLI sessions on Windows",
   "scripts": {
