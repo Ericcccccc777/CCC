@@ -1,7 +1,17 @@
 * { margin: 0; padding: 0; box-sizing: border-box; }
 
-body {
+/* The BrowserWindow is created with transparent:true + backgroundColor
+   '#00000000'. The renderer's root chain must ALSO be transparent or the
+   first opaque element in the chain paints over the window's alpha
+   channel — that's the "white halo" the user sees in corner mode where
+   most of the window is empty. Explicit declarations on every root node
+   so a future user-agent or framework default can't reintroduce it. */
+html, body, #root {
   background: transparent;
+  background-color: transparent;
+}
+
+body {
   font-family: -apple-system, 'Segoe UI', system-ui, sans-serif;
   overflow: hidden;
   height: 100vh;
@@ -46,11 +56,6 @@ body {
   to   { opacity: 1; }
 }
 
-@keyframes islandContract {
-  from { transform: scaleX(1.05) scaleY(1.1); }
-  to   { transform: scaleX(1)    scaleY(1);   }
-}
-
 /* Separate animation for model picker — must include translateX(-50%) so it
    doesn't clobber the centering transform set on the element itself. */
 @keyframes pickerSlideDown {
@@ -68,12 +73,14 @@ body {
   display: flex;
   flex-direction: column;
   align-items: center;
+  background: transparent;
 }
 
 /* ── Island pill ── */
-/* Shadow opacity / blur tuned so the spread (~22px) stays inside the
-   BrowserWindow's 30px horizontal padding — otherwise the OS clips it at the
-   window edge and the apparent shape becomes a rectangle. */
+/* Compact, low-spread shadow so the pill reads as floating without the
+   shadow halo touching the BrowserWindow edge. Reachable blur radius is
+   capped at ~10px which fits comfortably inside any mode's shadow padding
+   (default 30px H × 14px V, corner 16px). */
 .island {
   margin-top: 10px;
   background: #0a0a0a;
@@ -81,24 +88,29 @@ body {
   border: 1px solid rgba(255,255,255,0.08);
   box-shadow:
     0 0 0 1px rgba(255,255,255,0.04),
-    0 6px 22px rgba(0,0,0,0.45),
-    0 2px 6px rgba(0,0,0,0.30),
+    0 3px 8px rgba(0,0,0,0.40),
     inset 0 1px 0 rgba(255,255,255,0.06);
   cursor: pointer;
+  /* Width/height transitions trigger layout on every frame (main-thread
+     work). The previous cubic-bezier(0.34, 1.56, 0.64, 1) back-out bounce
+     overshot the target by ~10%, which on a 46→340 corner-expand looked
+     "flashy" and added extra paint frames at the overshoot peak. Smooth
+     ease-out + shorter duration cuts perceived stutter dramatically. */
   transition:
-    width  0.5s cubic-bezier(0.34, 1.56, 0.64, 1),
-    height 0.5s cubic-bezier(0.34, 1.56, 0.64, 1),
-    border-radius 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+    width  0.28s cubic-bezier(0.32, 0.72, 0, 1),
+    height 0.28s cubic-bezier(0.32, 0.72, 0, 1),
+    border-radius 0.24s cubic-bezier(0.32, 0.72, 0, 1);
   overflow: hidden;
-  animation: islandContract 0.3s ease;
+  /* Hint the compositor that this element changes geometry frequently;
+     promotes a dedicated layer so the resize doesn't repaint neighbors. */
+  will-change: width, height;
 }
 
 .island:hover {
   border-color: rgba(255,255,255,0.14);
   box-shadow:
     0 0 0 1px rgba(255,255,255,0.06),
-    0 8px 26px rgba(0,0,0,0.55),
-    0 2px 6px rgba(0,0,0,0.38),
+    0 4px 10px rgba(0,0,0,0.48),
     inset 0 1px 0 rgba(255,255,255,0.08);
 }
 
@@ -155,6 +167,209 @@ body {
 .logo-breathing { animation: breathing 2.8s ease-in-out infinite; }
 .logo-waiting   { animation: waitBlink 3.5s ease-in-out infinite; }
 .logo-pop       { animation: popIn 0.4s cubic-bezier(0.34,1.56,0.64,1) both; }
+
+/* ── Overlay-mode positioning ──
+   The wrapper's default `left: 50%; transform: translateX(-50%)` centers
+   the pill horizontally. Corner-shrunk anchors at top-left instead, so
+   the wrapper drops the translate and pill+popup flow from x=0. Drag mode
+   doesn't position anything from the wrapper — the .island is fixed-
+   positioned at the cursor in inline style. */
+/* top-hidden uses the same window bounds as default (no resize). The strip
+   vs pill display is a CSS toggle driven by .island-wrapper--peek below. */
+.island-wrapper--top-hidden {
+  /* Inherits default centering — nothing to override. */
+}
+/* corner-shrunk: the overlay window is now full work-area width (single-
+   window architecture, see App.tsx targetBounds). The wrapper anchors at
+   the LEFT edge of the window and pushes the .island in by CORNER_INSET so
+   the visible circle/panel sits at (16, 16) on the screen. The window's
+   un-painted area on the right is transparent. */
+.island-wrapper--corner-shrunk {
+  left:      0;
+  transform: none;
+  align-items: flex-start;
+  padding-left: 16px;
+  padding-top:  16px;
+}
+/* Reset the .island's default 10px margin-top in corner mode so the circle
+   sits at the top of the corner anchor, not 10px below it. */
+.island-wrapper--corner-shrunk .island {
+  margin-top: 0;
+}
+.island-wrapper--dragging {
+  left:      0;
+  transform: none;
+  align-items: flex-start;
+  padding: 0;
+}
+
+/* ── top-hidden strip ──
+   The strip is fully invisible — hover-peek is driven by body-level
+   mouseenter/leave (works because the overlay BrowserWindow runs in
+   setIgnoreMouseEvents(true, forward:true), so the renderer still gets
+   mouse events even though clicks pass through). The strip DOM stays
+   for layout symmetry and for the test mocks, but it never paints. */
+.top-strip {
+  position: absolute;
+  top:    0;
+  left:   50%;
+  transform: translateX(-50%);
+  width:  1px;
+  height: 1px;
+  background: transparent;
+  pointer-events: none;
+  opacity: 0;
+}
+/* Pill in top-hidden mode is faded out when not peeking so the strip is
+   the only visible element. Fades back in when the peek class is on the
+   wrapper. Pointer events are gated on visibility so phantom clicks in
+   the hidden state don't reach the pill. */
+.island-wrapper--top-hidden .island {
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-6px);
+  transition:
+    opacity 0.22s ease,
+    transform 0.22s cubic-bezier(0.34, 1.4, 0.64, 1);
+}
+.island-wrapper--top-hidden.island-wrapper--peek .island {
+  opacity: 1;
+  pointer-events: auto;
+  transform: none;
+}
+
+/* ── corner-shrunk circle ──
+   Reuses the .island chrome but constrains to a 46×46 square and clips to
+   a circle. Model name + rings are display:none in this mode so only the
+   StateIcon shows. The width transition is already on .island, so morphing
+   into / out of the circle animates for free. */
+.island--corner {
+  width:  46px;
+  height: 46px;
+  border-radius: 50%;
+}
+.island--corner .island-pill {
+  width:  46px;
+  height: 46px;
+  padding: 0;
+  justify-content: center;
+  gap: 0;
+}
+.island--corner .pill-center,
+.island--corner .rings {
+  display: none;
+}
+/* Hint banner: corner expands horizontally and shows a short text label
+   (e.g. "Question pending") in place of the hidden model name. */
+.island--corner-hint {
+  width:  280px;
+  border-radius: 26px;
+}
+.island--corner-hint .island-pill {
+  width:  280px;
+  padding: 0 16px 0 14px;
+  justify-content: flex-start;
+  gap: 10px;
+}
+.island--corner-hint .pill-center {
+  display: flex;
+  flex: 1;
+  justify-content: flex-start;
+  text-align: left;
+}
+.corner-hint-text {
+  font-size: 12px;
+  color: rgba(255,255,255,0.78);
+  letter-spacing: 0.2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ── Drag mode ──
+   Pill lifts off the wrapper layout and floats at the cursor. Stronger
+   shadow + slight scale so the user can see it's grabbed. */
+.island--dragging {
+  cursor: grabbing !important;
+  /* Slight lift so the pill reads as "grabbed". Position is set inline by
+     Island.tsx as the pill's top-left corner; no centering transform here. */
+  transform: scale(1.04) !important;
+  transform-origin: top left;
+  margin-top: 0 !important;
+  box-shadow:
+    0 0 0 1px rgba(255,255,255,0.10),
+    0 8px 18px rgba(0,0,0,0.50),
+    inset 0 1px 0 rgba(255,255,255,0.08);
+  /* No left/top transition during drag — pill must track the cursor
+     pixel-for-pixel without lag. */
+  transition: transform 0.12s ease;
+}
+
+/* ── Snap zones ──
+   Painted only during a drag. The .is-active modifier brightens the zone
+   when the pill is over it so the user knows where it will land. The
+   previous version pulsed box-shadow on every frame — that's main-thread
+   paint cost across 3 zones for the whole drag. Replaced with a one-shot
+   compositor-only fade-in (opacity transition) and a static border so
+   drag is cheap even on weaker hardware. */
+.snap-zone {
+  position: fixed;
+  border: 1px dashed rgba(212,168,71,0.55);
+  border-radius: 16px;
+  background: rgba(212,168,71,0.06);
+  pointer-events: none;
+  transition: background 0.16s ease, border-color 0.16s ease;
+  z-index: 8000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  animation: fadeIn 0.18s ease forwards;
+}
+.snap-zone.is-active {
+  background: rgba(212,168,71,0.18);
+  border-color: rgba(212,168,71,0.95);
+  border-style: solid;
+}
+.snap-zone__label {
+  font-size: 12px;
+  letter-spacing: 0.4px;
+  color: rgba(212,168,71,0.85);
+  text-transform: uppercase;
+  font-weight: 600;
+}
+.snap-zone.is-active .snap-zone__label {
+  color: rgba(255,236,180,1);
+}
+.snap-zone--corner {
+  /* Matches App.tsx's cornerZoneRect (SNAP_CORNER_SIZE = 168 at top-left). */
+  top:    0;
+  left:   0;
+  width:  168px;
+  height: 168px;
+  border-radius: 24px;
+}
+.snap-zone--hide {
+  /* Matches App.tsx's hideZoneRect (SNAP_HIDE_WIDTH 280 × SNAP_HIDE_HEIGHT 36
+     centered at top-edge). Slightly different border radius so it visually
+     reads as a "strip". */
+  top:    0;
+  left:   50%;
+  transform: translateX(-50%);
+  width:  280px;
+  height: 36px;
+  border-radius: 0 0 18px 18px;
+}
+.snap-zone--default {
+  /* Matches App.tsx's defaultZoneRect (SNAP_DEFAULT_WIDTH 440 × SNAP_DEFAULT_H
+     84, top = SNAP_HIDE_HEIGHT + SNAP_DEFAULT_GAP = 48). */
+  top:    48px;
+  left:   50%;
+  transform: translateX(-50%);
+  width:  440px;
+  height: 84px;
+  border-radius: 30px;
+}
 
 /* ── Session list ── */
 .session-group-header {
@@ -272,7 +487,7 @@ body {
   color: rgba(255,100,100,1);
 }
 
-/* ── Remote control button ── */
+/* ── Remote control button (left of harness gear) ── */
 .session-remote {
   width: 16px;
   height: 16px;
@@ -292,6 +507,29 @@ body {
 .session-remote:hover {
   background: rgba(110,170,255,0.16);
   border-color: rgba(110,170,255,0.45);
+  color: rgba(255,255,255,0.95);
+}
+
+/* ── Harness gear button (left of close) ── */
+.session-harness {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.12);
+  color: rgba(255,255,255,0.55);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+  padding: 0;
+}
+
+.session-harness:hover {
+  background: rgba(204,155,122,0.14);
+  border-color: rgba(204,155,122,0.4);
   color: rgba(255,255,255,0.95);
 }
 
@@ -790,6 +1028,19 @@ body {
   background: rgba(255,80,80,0.12);
   border-color: rgba(255,80,80,0.4);
   color: rgba(255,110,110,1);
+}
+
+/* Quit button — one shade more destructive than Stop All (filled, not just outlined). */
+.action-btn.danger-strong {
+  border-color: rgba(255,60,60,0.45);
+  background:   rgba(255,60,60,0.10);
+  color:        rgba(255,120,120,0.95);
+}
+
+.action-btn.danger-strong:hover {
+  background:   rgba(255,60,60,0.22);
+  border-color: rgba(255,60,60,0.7);
+  color:        rgba(255,170,170,1);
 }
 
 .action-btn.active {
@@ -1589,6 +1840,760 @@ body {
 
 
 /* ════════════════════════════════════════════════════════════════════════════
+   Harness Wizard (separate window — frame:false, dark, rounded)
+   ════════════════════════════════════════════════════════════════════════════ */
+
+.hw-window {
+  position: fixed;
+  inset: 0;
+  background: #0a0a0a;
+  color: rgba(255,255,255,0.85);
+  display: flex;
+  flex-direction: column;
+  border-radius: 14px;
+  overflow: hidden;
+  border: 1px solid rgba(255,255,255,0.08);
+  font-family: -apple-system, 'Segoe UI', system-ui, sans-serif;
+}
+
+.hw-titlebar {
+  display: flex;
+  align-items: center;
+  height: 38px;
+  padding: 0 6px 0 14px;
+  background: #0e0e0e;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+  flex-shrink: 0;
+}
+
+.hw-titlebar-drag {
+  flex: 1;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  -webkit-app-region: drag;
+  min-width: 0;
+}
+
+.hw-titlebar-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: rgba(255,255,255,0.85);
+  letter-spacing: 0.02em;
+}
+
+.hw-titlebar-workspace {
+  font-size: 10.5px;
+  color: rgba(255,255,255,0.35);
+  font-family: 'Cascadia Code', 'Consolas', monospace;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.hw-titlebar-close {
+  -webkit-app-region: no-drag;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  background: transparent;
+  border: 1px solid transparent;
+  color: rgba(255,255,255,0.45);
+  cursor: pointer;
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.hw-titlebar-close:hover {
+  background: rgba(255,60,60,0.18);
+  border-color: rgba(255,60,60,0.4);
+  color: rgba(255,120,120,1);
+}
+
+.hw-body {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+
+.hw-sidebar {
+  width: 200px;
+  flex-shrink: 0;
+  background: #0c0c0c;
+  border-right: 1px solid rgba(255,255,255,0.06);
+  display: flex;
+  flex-direction: column;
+  padding: 12px 8px;
+}
+
+.hw-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.hw-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 7px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: rgba(255,255,255,0.65);
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+  text-align: left;
+}
+
+.hw-nav-item:hover {
+  background: rgba(255,255,255,0.04);
+  color: rgba(255,255,255,0.9);
+}
+
+.hw-nav-item.is-active {
+  background: rgba(204,155,122,0.08);
+  border-color: rgba(204,155,122,0.25);
+  color: rgba(255,255,255,0.95);
+}
+
+.hw-nav-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.hw-nav-dot--new    { background: rgba(255,255,255,0.2); }
+.hw-nav-dot--saved  { background: oklch(0.65 0.18 145); }
+.hw-nav-dot--edited { background: oklch(0.78 0.18 75); }
+
+.hw-nav-label { flex: 1; }
+
+.hw-nav-required {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: rgba(255,255,255,0.3);
+  font-weight: 600;
+}
+
+.hw-sidebar-footer {
+  margin-top: auto;
+  padding-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.hw-generate-btn {
+  width: 100%;
+  height: 36px;
+  border-radius: 8px;
+  border: 1px solid rgba(204,155,122,0.4);
+  background: oklch(0.70 0.16 55);
+  color: #1a0d00;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.15s, background 0.15s;
+}
+
+.hw-generate-btn:hover { opacity: 0.9; }
+
+.hw-generate-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+  background: rgba(255,255,255,0.06);
+  color: rgba(255,255,255,0.3);
+  border-color: rgba(255,255,255,0.1);
+}
+
+.hw-status {
+  font-size: 10.5px;
+  color: rgba(255,255,255,0.5);
+  line-height: 1.4;
+  padding: 4px 6px;
+}
+
+.hw-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.hw-section-head {
+  padding: 16px 20px 10px;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+  flex-shrink: 0;
+}
+
+.hw-section-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: rgba(255,255,255,0.95);
+}
+
+.hw-section-hint {
+  display: block;
+  margin-top: 3px;
+  font-size: 11.5px;
+  color: rgba(255,255,255,0.45);
+}
+
+.hw-section-form {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.hw-section-form::-webkit-scrollbar       { width: 6px; }
+.hw-section-form::-webkit-scrollbar-track { background: transparent; }
+.hw-section-form::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.12); border-radius: 3px; }
+
+.hw-section-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 20px;
+  border-top: 1px solid rgba(255,255,255,0.06);
+  background: #0c0c0c;
+  flex-shrink: 0;
+}
+
+.hw-save-btn {
+  height: 32px;
+  padding: 0 18px;
+  border-radius: 7px;
+  border: 1px solid rgba(204,155,122,0.4);
+  background: oklch(0.70 0.16 55);
+  color: #1a0d00;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+
+.hw-save-btn:hover { opacity: 0.9; }
+
+.hw-save-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+  background: rgba(255,255,255,0.06);
+  color: rgba(255,255,255,0.4);
+  border-color: rgba(255,255,255,0.1);
+}
+
+.hw-section-state {
+  font-size: 10.5px;
+  color: rgba(255,255,255,0.4);
+  letter-spacing: 0.02em;
+}
+
+.hw-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.hw-field-label {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: rgba(255,255,255,0.75);
+  letter-spacing: 0.01em;
+}
+
+.hw-field-hint {
+  font-size: 10.5px;
+  color: rgba(255,255,255,0.4);
+  line-height: 1.4;
+}
+
+.hw-field-input {
+  width: 100%;
+  padding: 7px 9px;
+  border-radius: 6px;
+  border: 1px solid rgba(255,255,255,0.12);
+  background: rgba(255,255,255,0.04);
+  color: rgba(255,255,255,0.92);
+  font-family: inherit;
+  font-size: 12px;
+  outline: none;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.hw-field-input:focus {
+  border-color: rgba(204,155,122,0.4);
+  background: rgba(255,255,255,0.06);
+}
+
+.hw-field-textarea {
+  resize: vertical;
+  line-height: 1.5;
+  min-height: 70px;
+  font-family: inherit;
+}
+
+select.hw-field-input {
+  appearance: none;
+  cursor: pointer;
+  padding-right: 24px;
+}
+
+.hw-toggle {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.hw-toggle input { margin-top: 2px; cursor: pointer; }
+.hw-toggle-text { display: flex; flex-direction: column; gap: 2px; }
+
+.hw-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.hw-list-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.hw-kv-row .hw-kv-key { max-width: 130px; }
+
+.hw-row-remove {
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  border: 1px solid rgba(255,80,80,0.25);
+  background: rgba(255,60,60,0.08);
+  color: rgba(255,90,90,0.75);
+  cursor: pointer;
+  font-size: 10px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s, color 0.15s;
+}
+
+.hw-row-remove:hover { background: rgba(255,60,60,0.25); color: rgba(255,120,120,1); }
+
+.hw-add-btn {
+  align-self: flex-start;
+  height: 28px;
+  padding: 0 12px;
+  border-radius: 6px;
+  border: 1px dashed rgba(255,255,255,0.18);
+  background: transparent;
+  color: rgba(255,255,255,0.55);
+  font-family: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+}
+
+.hw-add-btn:hover {
+  border-color: rgba(204,155,122,0.45);
+  color: rgba(255,255,255,0.9);
+  background: rgba(255,255,255,0.03);
+}
+
+.hw-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border-radius: 9px;
+  border: 1px solid rgba(255,255,255,0.08);
+  background: rgba(255,255,255,0.025);
+}
+
+.hw-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.hw-card-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: rgba(255,255,255,0.85);
+}
+
+.hw-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.55);
+  backdrop-filter: blur(2px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.hw-modal {
+  width: min(560px, 90vw);
+  max-height: 80vh;
+  overflow-y: auto;
+  background: #0e0e0e;
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 14px;
+  padding: 18px 20px;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.7);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.hw-modal-title {
+  font-size: 11px;
+  font-weight: 700;
+  color: oklch(0.78 0.18 75);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.hw-modal-question {
+  font-size: 13px;
+  color: rgba(255,255,255,0.92);
+  line-height: 1.5;
+}
+
+.hw-modal-options {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.hw-modal-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(255,255,255,0.1);
+  background: rgba(255,255,255,0.03);
+  color: rgba(255,255,255,0.88);
+  font-family: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.hw-modal-option:hover {
+  background: rgba(204,155,122,0.1);
+  border-color: rgba(204,155,122,0.4);
+}
+
+.hw-modal-letter {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: rgba(204,155,122,0.18);
+  color: oklch(0.78 0.16 55);
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  font-size: 11px;
+}
+
+.hw-modal-hint {
+  font-size: 10.5px;
+  color: rgba(255,255,255,0.4);
+  font-style: italic;
+}
+
+/* ── Mode select page ──────────────────────────────────────────────────────── */
+
+.hw-mode-select {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 24px;
+  padding: 32px 24px;
+}
+
+.hw-mode-select-header { text-align: center; }
+
+.hw-mode-select-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: rgba(255,255,255,0.88);
+  margin: 0 0 5px;
+}
+
+.hw-mode-select-subtitle {
+  font-size: 12px;
+  color: rgba(255,255,255,0.42);
+  margin: 0;
+}
+
+.hw-mode-cards {
+  display: flex;
+  gap: 12px;
+  width: 100%;
+  max-width: 520px;
+}
+
+.hw-mode-card {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 18px 16px;
+  border-radius: 10px;
+  border: 1px solid rgba(255,255,255,0.1);
+  background: rgba(255,255,255,0.03);
+  color: inherit;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.hw-mode-card:hover {
+  background: rgba(204,155,122,0.08);
+  border-color: rgba(204,155,122,0.35);
+}
+
+.hw-mode-card-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: rgba(255,255,255,0.9);
+}
+
+.hw-mode-card-hint {
+  font-size: 11px;
+  color: rgba(255,255,255,0.48);
+  line-height: 1.5;
+}
+
+/* ── Beginner form ─────────────────────────────────────────────────────────── */
+
+.hw-beginner {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.hw-beginner-form {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.hw-beginner-form::-webkit-scrollbar       { width: 6px; }
+.hw-beginner-form::-webkit-scrollbar-track { background: transparent; }
+.hw-beginner-form::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.12); border-radius: 3px; }
+
+.hw-beginner-desc { min-height: 130px; }
+
+.hw-beginner-charcount {
+  font-size: 10px;
+  color: rgba(255,255,255,0.32);
+  align-self: flex-end;
+  margin-top: -8px;
+}
+
+.hw-beginner-charcount.is-short { color: oklch(0.65 0.18 30); }
+
+.hw-beginner-footer {
+  padding: 14px 24px;
+  border-top: 1px solid rgba(255,255,255,0.07);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* ── Pro banner + mode switch ──────────────────────────────────────────────── */
+
+.hw-pro-banner {
+  padding: 10px 14px;
+  background: rgba(255,255,255,0.03);
+  border-bottom: 1px solid rgba(255,255,255,0.07);
+  font-size: 11px;
+  color: rgba(255,255,255,0.5);
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.hw-mode-switch-link {
+  background: none;
+  border: none;
+  color: rgba(204,155,122,0.7);
+  font-family: inherit;
+  font-size: 10.5px;
+  cursor: pointer;
+  padding: 0;
+  text-align: left;
+}
+
+.hw-mode-switch-link:hover { color: rgba(204,155,122,1); }
+
+/* ── Architecture rule list ───────────────────────────────────────────────── */
+
+.hw-section-blurb {
+  font-size: 11px;
+  color: rgba(255,255,255,0.5);
+  line-height: 1.55;
+  margin: 0 0 6px;
+}
+
+.hw-rule-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 0;
+  border-bottom: 1px solid rgba(255,255,255,0.05);
+}
+
+.hw-rule-group-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 4px;
+}
+
+.hw-rule-group-toggle {
+  background: none;
+  border: none;
+  color: rgba(255,255,255,0.78);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0;
+  text-align: left;
+}
+
+.hw-rule-group-count {
+  font-weight: 400;
+  color: rgba(255,255,255,0.4);
+  margin-left: 4px;
+}
+
+.hw-rule-group-bulk {
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.08);
+  color: rgba(255,255,255,0.6);
+  font-family: inherit;
+  font-size: 10.5px;
+  border-radius: 5px;
+  padding: 3px 8px;
+  cursor: pointer;
+}
+
+.hw-rule-group-bulk:hover {
+  background: rgba(255,255,255,0.08);
+  color: rgba(255,255,255,0.85);
+}
+
+.hw-rule {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px 0;
+  border-radius: 4px;
+}
+
+.hw-rule.is-on .hw-rule-title { color: rgba(255,255,255,0.92); }
+
+.hw-rule-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.hw-rule-check {
+  margin: 0;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.hw-rule-title {
+  background: none;
+  border: none;
+  color: rgba(255,255,255,0.55);
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  padding: 0;
+  text-align: left;
+  flex: 1;
+}
+
+.hw-rule-title:hover { color: rgba(255,255,255,0.95); }
+
+.hw-rule-body {
+  margin-left: 24px;
+  padding: 6px 10px;
+  background: rgba(255,255,255,0.03);
+  border-radius: 5px;
+  font-size: 11px;
+  color: rgba(255,255,255,0.65);
+  line-height: 1.6;
+}
+
+/* ── Custom rule editor ───────────────────────────────────────────────────── */
+
+.hw-custom-rule {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  background: rgba(255,255,255,0.02);
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 6px;
+  margin-bottom: 6px;
+}
+
+.hw-custom-rule-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.hw-custom-rule-title { flex: 1; }
+
+/* ── Modal option hint (for ClaudeMdConflictModal) ────────────────────────── */
+
+.hw-modal-option-hint {
+  font-size: 10.5px;
+  color: rgba(255,255,255,0.4);
+  margin-top: 2px;
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
    Remote Control Popup
    ════════════════════════════════════════════════════════════════════════════ */
 
@@ -1782,3 +2787,72 @@ body {
 }
 
 .remote-popup-btn.primary:hover { opacity: 0.9; }
+
+/* ── Quit confirm popup (Settings → Quit) ─────────────────────────────
+   Sits directly below the expanded pill. Renderer collapses every
+   other sub-panel / popup before mounting this so the dialog reads
+   unambiguously: title, body, two buttons. */
+.quit-confirm-popup {
+  position: relative;
+  margin-top: 6px;
+  width: 320px;
+  box-sizing: border-box;
+  background: #0e0e0e;
+  border: 1px solid rgba(255,80,80,0.35);
+  border-radius: 24px;
+  padding: 14px 16px 12px;
+  z-index: 30;
+  animation: notifSlideDown 0.22s cubic-bezier(0.34, 1.56, 0.64, 1);
+  box-shadow: 0 6px 22px rgba(0,0,0,0.5);
+}
+
+.quit-confirm-popup__title {
+  color: rgba(255,200,200,0.95);
+  font-size: 13px;
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+
+.quit-confirm-popup__body {
+  color: rgba(255,255,255,0.62);
+  font-size: 11px;
+  line-height: 1.45;
+  margin-bottom: 12px;
+}
+
+.quit-confirm-popup__actions {
+  display: flex;
+  gap: 8px;
+}
+
+.quit-confirm-popup__btn {
+  flex: 1;
+  height: 30px;
+  border-radius: 8px;
+  border: 1px solid rgba(255,255,255,0.12);
+  background: rgba(255,255,255,0.05);
+  color: rgba(255,255,255,0.75);
+  font-size: 11.5px;
+  font-weight: 500;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.quit-confirm-popup__btn:hover {
+  background: rgba(255,255,255,0.1);
+  border-color: rgba(255,255,255,0.2);
+  color: rgba(255,255,255,0.95);
+}
+
+.quit-confirm-popup__btn--danger {
+  border-color: rgba(255,60,60,0.5);
+  background:   rgba(255,60,60,0.18);
+  color:        rgba(255,150,150,1);
+}
+
+.quit-confirm-popup__btn--danger:hover {
+  background:   rgba(255,60,60,0.32);
+  border-color: rgba(255,60,60,0.8);
+  color:        rgba(255,200,200,1);
+}

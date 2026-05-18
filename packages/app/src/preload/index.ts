@@ -6,6 +6,8 @@ import type {
   SessionRestored,
 } from '../shared/session-state'
 import type { PlatformCapabilities } from '../shared/platform'
+import type { HarnessConfig } from '../renderer/src/harness-types'
+import type { GenerateResult } from '../main/HarnessManager'
 import type {
   ApiProviderConfig,
   ApiProviderId,
@@ -75,6 +77,42 @@ contextBridge.exposeInMainWorld('ccc', {
   // Pass null to restore the default pill height
   setMainHeight: (height: number | null): void =>
     ipcRenderer.send(IPC.MAIN_SET_HEIGHT, height),
+
+  // Hide/show overlay-mode window manipulation. Bypasses setMainHeight's
+  // 520-min clamp so the top-hidden strip and corner-shrunk circle can be
+  // tens of pixels tall. animate is honored on macOS, no-op on Windows.
+  setOverlayBounds: (
+    bounds: { x: number; y: number; width: number; height: number },
+    opts?: { animate?: boolean },
+  ): void => ipcRenderer.send(IPC.OVERLAY_SET_BOUNDS, bounds, opts),
+
+  getWorkArea: (): Promise<{ x: number; y: number; width: number; height: number }> =>
+    ipcRenderer.invoke(IPC.OVERLAY_GET_WORK_AREA),
+
+  // ── Harness ──
+  harnessCheck: (workspace: string): Promise<{ hasConfig: boolean; hasClaudeMd: boolean }> =>
+    ipcRenderer.invoke(IPC.HARNESS_CHECK, workspace),
+
+  harnessLoad: (workspace: string): Promise<HarnessConfig | null> =>
+    ipcRenderer.invoke(IPC.HARNESS_LOAD, workspace),
+
+  harnessSave: (workspace: string, config: HarnessConfig): Promise<void> =>
+    ipcRenderer.invoke(IPC.HARNESS_SAVE, workspace, config),
+
+  harnessGenerate: (workspace: string, config: HarnessConfig): Promise<GenerateResult> =>
+    ipcRenderer.invoke(IPC.HARNESS_GENERATE, workspace, config),
+
+  expandWindow: (): void =>
+    ipcRenderer.send(IPC.HARNESS_EXPAND_WINDOW),
+
+  collapseWindow: (): void =>
+    ipcRenderer.send(IPC.HARNESS_COLLAPSE_WINDOW),
+
+  openHarnessWindow: (workspace: string): void =>
+    ipcRenderer.send(IPC.HARNESS_OPEN_WINDOW, workspace),
+
+  closeHarnessWindow: (): void =>
+    ipcRenderer.send(IPC.HARNESS_CLOSE_WINDOW),
 
   // ── Remote mirror ──
   getLocalMirrorUrl: (sessionId: number): Promise<string> =>
@@ -151,4 +189,10 @@ contextBridge.exposeInMainWorld('ccc', {
 
   listKnownSessions: (): Promise<readonly SessionRestored[]> =>
     ipcRenderer.invoke(IPC.SESSION_LIST_KNOWN),
+
+  // Full quit. Main kills all sessions (restoring each workspace's
+  // settings.json), stops the hook + mirror servers, then app.quit()s.
+  // Fire-and-forget — the renderer is about to be torn down.
+  quitApp: (): void =>
+    ipcRenderer.send(IPC.QUIT_APP),
 })

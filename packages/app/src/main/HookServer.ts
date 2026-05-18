@@ -34,13 +34,22 @@ export class HookServer {
   private terminalAwaiting = new Set<number>()
   private mirror:         MirrorServer | null = null
   private win:            BrowserWindow | null = null
+  private harnessAsk:     { res: http.ServerResponse; timer: ReturnType<typeof setTimeout> } | null = null
+  private harnessSessions = new Set<number>()
   private readonly preToolUseTimeoutMs: number
   // ApiUsageManager subscribes to every parsed transcript line so it can
   // pull `usage.*` off API-mode assistant messages. Set via setTranscriptSink;
   // null means no consumer (Anthropic-only run).
   private transcriptSink: ((sessionId: number, parsed: Record<string, unknown>) => void) | null = null
 
-  constructor(preToolUseTimeoutMs = 30_000) {
+  // 120s default (was 30s). With the renderer-side permission queue
+  // (parallel-tool-call fix), the user can have multiple permission popups
+  // pending and may need real wall-clock time to work through them. At
+  // 30s, queued items still auto-allow before the user gets to them —
+  // 120s gives reasonable headroom without breaking AskUserQuestion's
+  // terminal-picker fallback semantics (the picker just takes longer to
+  // appear if the user is genuinely AFK).
+  constructor(preToolUseTimeoutMs = 120_000) {
     this.preToolUseTimeoutMs = preToolUseTimeoutMs
   }
 
@@ -58,6 +67,25 @@ export class HookServer {
     let set = this.alwaysAllowed.get(sessionId)
     if (!set) { set = new Set(); this.alwaysAllowed.set(sessionId, set) }
     set.add(tool)
+  }
+
+  registerHarnessSession(sessionId: number): void {
+    this.harnessSessions.add(sessionId)
+  }
+
+  unregisterHarnessSession(sessionId: number): void {
+    this.harnessSessions.delete(sessionId)
+  }
+
+  isHarnessSession(sessionId: number): boolean {
+    return this.harnessSessions.has(sessionId)
+  }
+
+  answerHarnessAsk(answer: string): void {
+    if (!this.harnessAsk) return
+    clearTimeout(this.harnessAsk.timer)
+    this.reply(this.harnessAsk.res, { answer })
+    this.harnessAsk = null
   }
 
   start(): Promise<number> {
@@ -82,6 +110,10 @@ export class HookServer {
     ipcMain.on(IPC.ALLOW_TOOL_ALWAYS, (_e, sessionId: number, tool: string) => {
       this.allowToolAlways(sessionId, tool)
     })
+
+    ipcMain.on(IPC.HARNESS_ANSWER, (_e, answer: string) => {
+      this.answerHarnessAsk(answer)
+    })
   }
 
   stop(): void {
@@ -90,16 +122,23 @@ export class HookServer {
       this.reply(p.res, { exitCode: 0 })
     }
     this.pendingHooks.clear()
+    if (this.harnessAsk) {
+      clearTimeout(this.harnessAsk.timer)
+      this.reply(this.harnessAsk.res, { answer: 'D' })
+      this.harnessAsk = null
+    }
     for (const [, t] of this.transcripts) clearInterval(t.timer)
     this.transcripts.clear()
     this.alwaysAllowed.clear()
     this.lastDoneAt.clear()
     this.terminalAwaiting.clear()
+    this.harnessSessions.clear()
     this.mirror?.stop()
     this.mirror = null
     this.server.close()
     ipcMain.removeAllListeners(IPC.HOOK_DECISION)
     ipcMain.removeAllListeners(IPC.ALLOW_TOOL_ALWAYS)
+    ipcMain.removeAllListeners(IPC.HARNESS_ANSWER)
   }
 
   stopTranscript(sessionId: number): void {
@@ -133,11 +172,35 @@ export class HookServer {
           }, res)
         } else if (req.url === '/statusline') {
           this.handleStatusLine(parsed as { sessionId: number; data: Record<string, unknown> }, res)
+        } else if (req.url === '/harness-ask') {
+          this.handleHarnessAsk(parsed as { question: string; options: string[] }, res)
         } else {
           res.writeHead(404); res.end()
         }
       } catch { res.writeHead(400); res.end() }
     })
+  }
+
+  private handleHarnessAsk(data: { question: string; options: string[] }, res: http.ServerResponse): void {
+    // Cancel any previous pending ask (shouldn't happen, but be safe)
+    if (this.harnessAsk) {
+      clearTimeout(this.harnessAsk.timer)
+      this.reply(this.harnessAsk.res, { answer: 'D' })
+    }
+    // Broadcast to every open window — the harness wizard window subscribes,
+    // the main pill window ignores it. (Wizard runs in its own BrowserWindow.)
+    for (const w of BrowserWindow.getAllWindows()) {
+      w.webContents.send(IPC.HARNESS_QUESTION, {
+        question: data.question,
+        options:  data.options,
+      })
+    }
+    // Block until answered — 5 minute timeout defaults to "D"
+    const timer = setTimeout(() => {
+      this.harnessAsk = null
+      this.reply(res, { answer: 'D' })
+    }, 300_000)
+    this.harnessAsk = { res, timer }
   }
 
   private handleStatusLine(p: { sessionId: number; data: Record<string, unknown> }, res: http.ServerResponse): void {
@@ -262,11 +325,27 @@ export class HookServer {
     // entries written back when a tool finishes. Their arrival means the
     // user has interacted with the terminal — clear terminalAwaiting so the
     // *next* assistant message can flip to streaming naturally.
+    //
+    // If terminalAwaiting WAS set (the AskUserQuestion popup timed out and
+    // Claude is now showing the picker in the terminal), the user just
+    // answered there. Push state='streaming' so the renderer drops any
+    // stale notification + flips state immediately, without waiting for
+    // the next assistant message. This triggers the per-mode dismiss
+    // behavior the user asked for:
+    //   - default mode: popup closes
+    //   - top-hidden:   notification clears → 2s auto-rehide kicks in →
+    //                   pill goes back to the strip
+    //   - corner-shrunk: cornerHintActive becomes false → banner collapses
+    //                   to bare circle
     const isUser =
       obj['type'] === 'user' ||
       msg?.['role'] === 'user'
     if (isUser) {
+      const wasTerminalAwaiting = this.terminalAwaiting.has(sessionId)
       this.terminalAwaiting.delete(sessionId)
+      if (wasTerminalAwaiting) {
+        this.sendState({ sessionId, state: 'streaming' })
+      }
       return
     }
 
@@ -281,15 +360,24 @@ export class HookServer {
     //       call we're holding, not actual streaming. Without this, the
     //       popup gets clobbered ~800ms after appearing (visible bug:
     //       "popup flashes once and disappears").
-    //   (b) AskUserQuestion popup timed out and Claude is now awaiting
-    //       user input in the terminal — keep icon `?` until the user
-    //       interacts (which arrives as the user-msg branch above).
     //   (c) Within 2s of a Stop event — prevents transcript watcher from
     //       overriding 'done' after model switch.
     const hasPendingHook = [...this.pendingHooks.values()]
       .some(p => p.sessionId === sessionId)
     if (hasPendingHook) return
-    if (this.terminalAwaiting.has(sessionId)) return
+
+    // Forward-progress fallback (DECISION_LOG 2026-05-17-3 option B): if
+    // terminalAwaiting is still set when an assistant message arrives,
+    // the user MUST have already answered the terminal picker for Claude
+    // to be writing this. The user-msg detection above didn't match in
+    // observed Claude Code schemas — assistant-msg is a strict superset
+    // of "user has answered" and clears the flag here instead of
+    // suppressing the streaming flip.
+    if (this.terminalAwaiting.has(sessionId)) {
+      this.terminalAwaiting.delete(sessionId)
+      // Fall through to the streaming-flip below (still guarded by the
+      // 2s-after-done window so we don't clobber a fresh `done`).
+    }
     const lastDone = this.lastDoneAt.get(sessionId) ?? 0
     if (Date.now() - lastDone > 2000) {
       this.sendState({ sessionId, state: 'streaming' })
@@ -302,6 +390,12 @@ export class HookServer {
   ): void {
     if (p.event === 'pretooluse') {
       const tool = p.tool ?? 'unknown'
+      // Harness sessions auto-allow all tool use (Claude is writing harness files)
+      if (this.harnessSessions.has(p.sessionId)) {
+        this.reply(res, { exitCode: 0 })
+        this.sendState({ sessionId: p.sessionId, state: 'streaming' })
+        return
+      }
       if (this.alwaysAllowed.get(p.sessionId)?.has(tool)) {
         this.reply(res, { exitCode: 0 })
         this.sendState({ sessionId: p.sessionId, state: 'streaming' })

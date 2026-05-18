@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
-import { Island, formatCountdown } from '@renderer/components/Island'
+import { Island, formatCountdown, shouldSuppressNotifPopup } from '@renderer/components/Island'
 import type { Session, AppState, ActionType } from '@renderer/types'
 
 const DEFAULT_SESSION: Session = {
@@ -16,6 +16,7 @@ const DEFAULT_SESSION: Session = {
   reset7dAt:     0,
   state:         'streaming',
   notification:  null,
+  pendingPermissions: [],
   lastActivityAt: 0,
   mode:          'anthropic',
 }
@@ -64,10 +65,12 @@ class IslandTests {
       onRemoveSession:     vi.fn(),
       onRenameSession:     vi.fn(),
       onSelectSession:     vi.fn(),
+      onOpenHarness:       vi.fn(),
       onOpenRemote:        vi.fn(),
       onCloseRemote:       vi.fn(),
       onActivateRemote:    vi.fn(),
       onAction:            vi.fn(),
+      onQuit:              vi.fn(),
       onDismissNotif:      vi.fn(),
       onHookDecision:      vi.fn(),
       onAllowAlways:       vi.fn(),
@@ -139,6 +142,11 @@ class IslandTests {
         it('shows session names in the list', () => {
           render(<Island {...IslandTests.makeProps({ expanded: true })} />)
           expect(screen.getByText('test-session')).toBeDefined()
+        })
+
+        it('hides the harness button even though the internal handler is still wired', () => {
+          render(<Island {...IslandTests.makeProps({ expanded: true, onOpenHarness: vi.fn() })} />)
+          expect(screen.queryByLabelText('Open harness wizard for test-session')).toBeNull()
         })
 
         it('does NOT render an API Sessions group when no api-mode sessions exist (backwards-compatible UI)', () => {
@@ -222,6 +230,42 @@ class IslandTests {
           render(<Island {...IslandTests.makeProps({ expanded: true, onAction })} />)
           fireEvent.click(screen.getByText('Stop All'))
           expect(onAction).toHaveBeenCalledWith('stop')
+        })
+
+        it('shows Quit button when expanded', () => {
+          render(<Island {...IslandTests.makeProps({ expanded: true })} />)
+          expect(screen.getByText('Quit')).toBeDefined()
+        })
+
+        it('calls onQuit when Quit button clicked', () => {
+          const onQuit = vi.fn()
+          render(<Island {...IslandTests.makeProps({ expanded: true, onQuit })} />)
+          fireEvent.click(screen.getByText('Quit'))
+          expect(onQuit).toHaveBeenCalledTimes(1)
+        })
+      })
+
+      describe('shouldSuppressNotifPopup', () => {
+        it('never suppresses anything in default mode', () => {
+          expect(shouldSuppressNotifPopup('default', 'done')).toBe(false)
+          expect(shouldSuppressNotifPopup('default', 'permission')).toBe(false)
+          expect(shouldSuppressNotifPopup('default', 'message')).toBe(false)
+        })
+
+        it('suppresses done in every non-default mode', () => {
+          expect(shouldSuppressNotifPopup('top-hidden', 'done')).toBe(true)
+          expect(shouldSuppressNotifPopup('corner-shrunk', 'done')).toBe(true)
+        })
+
+        it('suppresses message in every non-default mode (background toasts)', () => {
+          expect(shouldSuppressNotifPopup('top-hidden', 'message')).toBe(true)
+          expect(shouldSuppressNotifPopup('corner-shrunk', 'message')).toBe(true)
+        })
+
+        it('NEVER suppresses permission (always actionable — needs buttons)', () => {
+          expect(shouldSuppressNotifPopup('default', 'permission')).toBe(false)
+          expect(shouldSuppressNotifPopup('top-hidden', 'permission')).toBe(false)
+          expect(shouldSuppressNotifPopup('corner-shrunk', 'permission')).toBe(false)
         })
       })
 
@@ -862,6 +906,142 @@ class IslandTests {
       })
       it('>= 1d → "Nd Mh Pm"', () => {
         expect(formatCountdown(NOW + (2 * 24 * 60 + 3 * 60 + 45) * 60_000, NOW)).toBe('2d 3h 45m')
+      })
+    })
+
+    // ── Hide / shrink overlay modes ─────────────────────────────────────
+    // These exercise the visual surface of overlayMode prop combinations.
+    // The state machine itself (long-press timing, drag-tracking math,
+    // setOverlayBounds plumbing) lives in App.tsx and is exercised via
+    // manual verification — keeping these renderer assertions narrow.
+    describe('overlay modes', () => {
+      // Architecture note: in the current design, top-hidden mode renders
+      // BOTH the strip and the pill in the DOM at all times; visibility is
+      // driven by the .island-wrapper--peek class on the wrapper (set in
+      // App.tsx, not visible in these renderer-only tests). The window
+      // stays pill-sized in top-hidden mode so there's no resize flicker.
+      it('renders both the strip and the pill DOM in top-hidden mode', () => {
+        const { container } = render(<Island {...IslandTests.makeProps({
+          overlayMode: 'top-hidden', overlayPeek: false,
+        })} />)
+        expect(container.querySelector('.top-strip')).not.toBeNull()
+        expect(container.querySelector('.island')).not.toBeNull()
+      })
+
+      it('still renders the pill when peeking (CSS class on wrapper toggles visibility)', () => {
+        const { container } = render(<Island {...IslandTests.makeProps({
+          overlayMode: 'top-hidden', overlayPeek: true,
+        })} />)
+        expect(container.querySelector('.island')).not.toBeNull()
+      })
+
+      it('keeps the pill in the DOM when a notification fires in top-hidden mode', () => {
+        // Notification must keep the pill visible even when peek is false;
+        // App.tsx forces peek=true while a notification is active so the
+        // user sees the popup. DOM-wise the pill is always there.
+        const { container } = render(<Island {...IslandTests.makeProps({
+          overlayMode: 'top-hidden', overlayPeek: false,
+          notification:  { type: 'done' },
+        })} />)
+        expect(container.querySelector('.island')).not.toBeNull()
+      })
+
+      it('hides the strip during a drag (snap zones own the canvas)', () => {
+        const { container } = render(<Island {...IslandTests.makeProps({
+          overlayMode: 'top-hidden', overlayPeek: false,
+          dragState: { fromMode: 'top-hidden', pointerX: 100, pointerY: 100, hoverZone: null },
+        })} />)
+        expect(container.querySelector('.top-strip')).toBeNull()
+      })
+
+      it('renders the corner-circle modifier and hides the model-name button in corner-shrunk', () => {
+        const { container } = render(<Island {...IslandTests.makeProps({
+          overlayMode: 'corner-shrunk', state: 'idle',
+        })} />)
+        const island = container.querySelector('.island')
+        expect(island).not.toBeNull()
+        expect(island!.classList.contains('island--corner')).toBe(true)
+        expect(island!.classList.contains('island--corner-hint')).toBe(false)
+        // No hint text; pill-center still renders the model-name-btn but
+        // CSS hides it. Assert the class hook is correct.
+        expect(container.querySelector('.corner-hint-text')).toBeNull()
+      })
+
+      it('expands corner-shrunk into the hint banner when state == waiting', () => {
+        const { container } = render(<Island {...IslandTests.makeProps({
+          overlayMode: 'corner-shrunk', state: 'waiting',
+        })} />)
+        const island = container.querySelector('.island')!
+        expect(island.classList.contains('island--corner')).toBe(true)
+        expect(island.classList.contains('island--corner-hint')).toBe(true)
+        // Default EN string for waiting hint.
+        expect(screen.getByText('Question pending')).toBeDefined()
+      })
+
+      it('expands corner-shrunk into the hint banner when state == done', () => {
+        render(<Island {...IslandTests.makeProps({
+          overlayMode: 'corner-shrunk', state: 'done',
+        })} />)
+        expect(screen.getByText('Session complete')).toBeDefined()
+      })
+
+      it('does NOT apply corner modifiers when overlayMode is default', () => {
+        const { container } = render(<Island {...IslandTests.makeProps({
+          overlayMode: 'default', state: 'waiting',
+        })} />)
+        const island = container.querySelector('.island')!
+        expect(island.classList.contains('island--corner')).toBe(false)
+        expect(island.classList.contains('island--corner-hint')).toBe(false)
+      })
+
+      it('renders all three snap zones only while drag is engaged', () => {
+        const { container, rerender } = render(<Island {...IslandTests.makeProps({
+          overlayMode: 'default', dragState: null,
+        })} />)
+        expect(container.querySelectorAll('.snap-zone').length).toBe(0)
+
+        rerender(<Island {...IslandTests.makeProps({
+          overlayMode: 'default',
+          dragState:   { fromMode: 'default', pointerX: 100, pointerY: 100, hoverZone: null },
+        })} />)
+        expect(container.querySelector('.snap-zone--hide')).not.toBeNull()
+        expect(container.querySelector('.snap-zone--corner')).not.toBeNull()
+        expect(container.querySelector('.snap-zone--default')).not.toBeNull()
+      })
+
+      it('marks the hovered snap zone with is-active', () => {
+        const { container, rerender } = render(<Island {...IslandTests.makeProps({
+          dragState: { fromMode: 'default', pointerX: 720, pointerY: 30, hoverZone: 'top' },
+        })} />)
+        expect(container.querySelector('.snap-zone--hide')!.classList.contains('is-active')).toBe(true)
+        expect(container.querySelector('.snap-zone--corner')!.classList.contains('is-active')).toBe(false)
+        expect(container.querySelector('.snap-zone--default')!.classList.contains('is-active')).toBe(false)
+
+        rerender(<Island {...IslandTests.makeProps({
+          dragState: { fromMode: 'default', pointerX: 720, pointerY: 90, hoverZone: 'default' },
+        })} />)
+        expect(container.querySelector('.snap-zone--default')!.classList.contains('is-active')).toBe(true)
+        expect(container.querySelector('.snap-zone--hide')!.classList.contains('is-active')).toBe(false)
+      })
+
+      it('positions the pill at the cursor while dragging', () => {
+        const { container } = render(<Island {...IslandTests.makeProps({
+          dragState: { fromMode: 'default', pointerX: 333, pointerY: 222, hoverZone: null },
+        })} />)
+        const island = container.querySelector('.island') as HTMLElement
+        expect(island).not.toBeNull()
+        expect(island.classList.contains('island--dragging')).toBe(true)
+        expect(island.style.left).toBe('333px')
+        expect(island.style.top).toBe('222px')
+      })
+
+      it('fires onPillPointerDown for clicks on the pill body (not the model button)', () => {
+        const onPillPointerDown = vi.fn()
+        const { container } = render(<Island {...IslandTests.makeProps({
+          onPillPointerDown,
+        })} />)
+        fireEvent.mouseDown(container.querySelector('.island-pill')!)
+        expect(onPillPointerDown).toHaveBeenCalledOnce()
       })
     })
   }

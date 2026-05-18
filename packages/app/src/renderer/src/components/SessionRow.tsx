@@ -44,6 +44,7 @@ interface SessionRowProps {
   onSelect:       () => void
   onRemove:       () => void
   onRename:       (name: string) => void
+  onOpenHarness?: () => void
   onOpenRemote?:  () => void
   // Optional: when provided, button hovers report into the pill's
   // model-name hint area so the user can read what each icon does
@@ -54,7 +55,7 @@ interface SessionRowProps {
 
 export function SessionRow({
   session, active, apiBalance, apiUsage,
-  onSelect, onRemove, onRename, onOpenRemote, onHoverHint,
+  onSelect, onRemove, onRename, onOpenHarness, onOpenRemote, onHoverHint,
 }: SessionRowProps) {
   const t = useLang()
   const [editing, setEditing] = useState(false)
@@ -177,6 +178,25 @@ export function SessionRow({
         </button>
       )}
 
+      {onOpenHarness && (
+        <button
+          className="session-harness"
+          onClick={e => { e.stopPropagation(); onOpenHarness() }}
+          aria-label={`Open harness wizard for ${session.name}`}
+          onMouseEnter={() => onHoverHint?.(t.harnessTooltip)}
+          onMouseLeave={() => onHoverHint?.(null)}
+        >
+          <svg width="11" height="11" viewBox="0 0 16 16" fill="none">
+            <path
+              d="M8 1.5a1.6 1.6 0 0 0-1.6 1.6v.6a4.6 4.6 0 0 0-1.4.6l-.4-.4a1.6 1.6 0 1 0-2.3 2.3l.4.4a4.6 4.6 0 0 0-.6 1.4h-.6a1.6 1.6 0 1 0 0 3.2h.6c.13.5.34 1 .6 1.4l-.4.4a1.6 1.6 0 1 0 2.3 2.3l.4-.4c.4.27.9.47 1.4.6v.6a1.6 1.6 0 1 0 3.2 0v-.6a4.6 4.6 0 0 0 1.4-.6l.4.4a1.6 1.6 0 1 0 2.3-2.3l-.4-.4c.27-.4.47-.9.6-1.4h.6a1.6 1.6 0 1 0 0-3.2h-.6a4.6 4.6 0 0 0-.6-1.4l.4-.4a1.6 1.6 0 1 0-2.3-2.3l-.4.4a4.6 4.6 0 0 0-1.4-.6v-.6A1.6 1.6 0 0 0 8 1.5Zm0 4.5a2 2 0 1 1 0 4 2 2 0 0 1 0-4Z"
+              stroke="currentColor"
+              strokeWidth="0.8"
+              fill="none"
+              strokeLinejoin="round"
+            />
+          </svg>
+        </button>
+      )}
 
       <button
         className="session-close"

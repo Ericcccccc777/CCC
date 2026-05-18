@@ -14,6 +14,26 @@ export const IPC = {
   SESSION_RESTORED:        'ccc:session-restored',
   SESSION_LIST_KNOWN:      'ccc:session-list-known',
   MAIN_SET_HEIGHT:         'ccc:main-set-height',
+  // Hide/show overlay modes (default top-center pill, top-edge auto-hide
+  // strip, top-left shrunk circle). Renderer drives the state machine and
+  // tells main where to put the BrowserWindow + how big to make it. Drag
+  // mode also goes through this channel — bypasses MAIN_SET_HEIGHT's
+  // min-clamp so the strip can be 6px tall.
+  OVERLAY_SET_BOUNDS:      'ccc:overlay-set-bounds',
+  OVERLAY_GET_WORK_AREA:   'ccc:overlay-get-work-area',
+  // Harness
+  HARNESS_CHECK:           'harness:check',
+  HARNESS_LOAD:            'harness:load',
+  HARNESS_SAVE:            'harness:save',
+  HARNESS_GENERATE:        'harness:generate',
+  HARNESS_ANSWER:          'harness:answer',
+  HARNESS_QUESTION:        'harness:question',
+  HARNESS_COMPLETE:        'harness:complete',
+  HARNESS_ERROR:           'harness:error',
+  HARNESS_EXPAND_WINDOW:   'harness:expand-window',
+  HARNESS_COLLAPSE_WINDOW: 'harness:collapse-window',
+  HARNESS_OPEN_WINDOW:     'harness:open-window',
+  HARNESS_CLOSE_WINDOW:    'harness:close-window',
   // Remote mirror
   REMOTE_MIRROR_URL:       'remote:mirror-url',
   // Platform capabilities (renderer probes for accessibility-permission UI etc.)
@@ -44,4 +64,8 @@ export const IPC = {
   CODEX_CLI_REDETECT:               'codex-cli:redetect',
   CODEX_CLI_LAUNCH:                 'codex-cli:launch',
   CODEX_CLI_SELECT_MODEL:           'codex-cli:select-model',
+  // App lifecycle — user-initiated full quit from Settings → Quit button.
+  // Full teardown happens via win.on('closed') → cleanup() so the renderer
+  // only fires-and-forgets here.
+  QUIT_APP:                         'app:quit',
 } as const

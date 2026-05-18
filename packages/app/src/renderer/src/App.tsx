@@ -1,10 +1,153 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import type { MouseEvent as ReactMouseEvent } from 'react'
 import { Island, MODELS_INFO } from './components/Island'
 import { ApiSwitchPopup } from './components/ApiSwitchPopup'
 import { CodexSwitchPopup } from './components/CodexSwitchPopup'
 import { NewSessionEnginePopup } from './components/NewSessionEnginePopup'
-import type { AppState, Session, ActionType, SessionNotification, SessionStateUpdate, SessionMetricsUpdate, SessionRestored, CodexReasoningEffort } from './types'
+import { QuitConfirmPopup } from './components/QuitConfirmPopup'
+import type { AppState, OverlayMode, Session, ActionType, SessionNotification, SessionStateUpdate, SessionMetricsUpdate, SessionRestored, CodexReasoningEffort } from './types'
+
+// --- Overlay layout constants ----------------------------------------------
+// All overlay-mode bounds are derived from these. Single source so the snap
+// zones, the resting positions, and the test mocks stay aligned. The pill is
+// always anchored to the top of the work area; only x/width/height change.
+const PILL_WIDTH       = 400
+const PILL_HEIGHT_BASE = 60
+// Window padding around the visible content for shadow space. Every
+// non-drag window is sized to include this on all sides so the .island
+// box-shadow renders fully and isn't clipped at the BrowserWindow edge.
+// 16 is enough headroom for the 10px shadow blur + a couple px buffer.
+const SHADOW_PAD       = 16
+const CORNER_SIZE      = 46
+// CORNER_INSET kept ≥ SHADOW_PAD so the window's x/y never goes negative
+// after subtracting the pad — keeps bounds-clamping in main process a no-op.
+const CORNER_INSET     = 16
+const CORNER_NOTIF_W   = 280
+const LONG_PRESS_MS    = 400
+const DRAG_THRESHOLD   = 6  // px movement before mousedown becomes a drag
+
+type WorkArea = { x: number; y: number; width: number; height: number }
+type Bounds   = { x: number; y: number; width: number; height: number }
+type HoverZone = 'top' | 'corner' | 'default'
+
+interface DragState {
+  fromMode:  OverlayMode
+  // Pointer in *screen* coordinates. Stored as screen coords because the
+  // BrowserWindow resizes on drag-engage, so window-local coords would
+  // shift mid-drag. Render-time converts to window-local via workArea.
+  screenX:   number
+  screenY:   number
+  // Cursor offset within the pill at mousedown. Pill renders at
+  // (cursor − offset), so whatever the user grabbed (left icon, ring,
+  // pill body) stays pinned under the cursor for the entire drag.
+  offsetX:   number
+  offsetY:   number
+  hoverZone: HoverZone | null
+}
+
+function notifBudget(n: SessionNotification | null): number {
+  if (!n) return 0
+  if (n.type === 'permission') return 520
+  if (n.type === 'message')    return 90
+  if (n.type === 'done')       return 70
+  return 0
+}
+
+// Height budgets for the App-level floating popups that render as siblings
+// of Island inside .island-wrapper. The window MUST include this room or
+// the popup paints below the BrowserWindow's bottom edge and gets clipped.
+// Numbers track each popup's worst-case rendered height + the 6px margin
+// the wrapper flow gives between siblings.
+const POPUP_ENGINE_PICKER = 220   // .engine-picker-popup (title + hint + 2 buttons)
+const POPUP_API_SWITCH    = 230   // .api-switch-popup
+const POPUP_CODEX_SWITCH  = 240   // .codex-switch-popup (effort buttons row)
+const POPUP_QUIT_CONFIRM  = 180   // .quit-confirm-popup
+
+// Total pill window height for a given UI state. Returns the minimum
+// height the BrowserWindow must have so every visible element (pill +
+// any popup stacked below it inside the wrapper) renders without being
+// clipped. Single source of truth — App.tsx targetBounds and Island
+// height-management both read from this.
+function computePillHeight(opts: {
+  expanded:                 boolean
+  showSettings:             boolean
+  showModelPicker:          boolean
+  notification:             SessionNotification | null
+  remotePopupSessionId:     number | null
+  pendingEngineWorkspace:   boolean
+  pendingApiSwitch:         boolean
+  pendingCodexSwitch:       boolean
+  showQuitConfirm:          boolean
+}): number {
+  if (opts.remotePopupSessionId !== null) return 820
+  const budget = notifBudget(opts.notification)
+  // App-level floating popups stack below the pill in the wrapper flex.
+  // Add the tallest one that's currently open — they're mutually exclusive
+  // by UX (only one at a time) so we don't need to sum them, but use max
+  // defensively in case two ever land in the same render.
+  let popupBudget = 0
+  if (opts.pendingEngineWorkspace) popupBudget = Math.max(popupBudget, POPUP_ENGINE_PICKER)
+  if (opts.pendingApiSwitch)       popupBudget = Math.max(popupBudget, POPUP_API_SWITCH)
+  if (opts.pendingCodexSwitch)     popupBudget = Math.max(popupBudget, POPUP_CODEX_SWITCH)
+  if (opts.showQuitConfirm)        popupBudget = Math.max(popupBudget, POPUP_QUIT_CONFIRM)
+  if (!opts.expanded && !opts.showModelPicker && budget === 0 && popupBudget === 0) {
+    return PILL_HEIGHT_BASE
+  }
+  let h = opts.expanded ? 520 : PILL_HEIGHT_BASE
+  // Picker has up to 3 rows (anthropic + deepseek + codex) plus padding.
+  // The pre-refactor MAIN_SET_HEIGHT had a 520 min-clamp that masked the
+  // need for an accurate number; now that the overlay window is sized
+  // exactly to content, the budget has to actually fit. 220 covers the
+  // worst case (all rows + per-chip name/desc) with a small buffer.
+  if (opts.showModelPicker) h += 220
+  if (opts.showSettings)    h  = Math.max(h, 840)
+  if (budget > 0)           h += budget
+  if (popupBudget > 0)      h += popupBudget
+  return h
+}
+
+// Snap-zone rects in *screen* coords. Three discrete drop targets:
+//   - corner: top-left square → corner-shrunk mode (circle)
+//   - top:    thin band along the very top edge → top-hidden mode (strip)
+//   - default: pill-shaped box at top-center, just below the hide strip →
+//              default mode (the resting position the pill normally sits at)
+// Layout is non-overlapping so each is a distinct visible target; corner
+// still gets priority on hit-test for safety against future tweaks.
+const SNAP_CORNER_SIZE   = 168
+const SNAP_HIDE_HEIGHT   = 36
+const SNAP_HIDE_WIDTH    = 280
+const SNAP_DEFAULT_GAP   = 12      // gap between hide band and default box
+const SNAP_DEFAULT_WIDTH = 440
+const SNAP_DEFAULT_H     = 84
+
+function cornerZoneRect(wa: WorkArea): Bounds {
+  return { x: wa.x, y: wa.y, width: SNAP_CORNER_SIZE, height: SNAP_CORNER_SIZE }
+}
+function hideZoneRect(wa: WorkArea): Bounds {
+  return {
+    x: wa.x + Math.floor((wa.width - SNAP_HIDE_WIDTH) / 2),
+    y: wa.y,
+    width:  SNAP_HIDE_WIDTH,
+    height: SNAP_HIDE_HEIGHT,
+  }
+}
+function defaultZoneRect(wa: WorkArea): Bounds {
+  return {
+    x: wa.x + Math.floor((wa.width - SNAP_DEFAULT_WIDTH) / 2),
+    y: wa.y + SNAP_HIDE_HEIGHT + SNAP_DEFAULT_GAP,
+    width:  SNAP_DEFAULT_WIDTH,
+    height: SNAP_DEFAULT_H,
+  }
+}
+function pointInRect(x: number, y: number, r: Bounds): boolean {
+  return x >= r.x && x <= r.x + r.width && y >= r.y && y <= r.y + r.height
+}
+function classifyHoverZone(x: number, y: number, wa: WorkArea): HoverZone | null {
+  if (pointInRect(x, y, cornerZoneRect(wa)))  return 'corner'
+  if (pointInRect(x, y, hideZoneRect(wa)))    return 'top'
+  if (pointInRect(x, y, defaultZoneRect(wa))) return 'default'
+  return null
+}
 import type { ApiProviderId, ApiProviderListEntry } from '../../shared/api-provider'
 import type { ApiBalanceSnapshot, ApiUsageSnapshot } from '../../shared/api-usage'
 import type { ClaudeCliStatus } from '../../shared/claude-cli'
@@ -13,6 +156,39 @@ import { FALLBACK_CODEX_MODELS } from '../../shared/codex-cli'
 
 function basenameOf(p: string): string {
   return p.replace(/\\/g, '/').split('/').filter(Boolean).pop() ?? p
+}
+
+// Advance the per-session permission queue: when the currently-shown
+// permission popup is dismissed or answered, pop the next queued one
+// (set as the new notification, keep state='waiting') OR if the queue
+// is empty, fall back to the caller's onEmpty policy. Centralises the
+// "show next permission" logic so every dismiss path stays consistent.
+//   - 'streaming': caller answered the popup → start the Claude tool
+//                  immediately if no queue; icon flips to streaming.
+//   - 'preserve' : caller just closed the popup (dismissNotif) without
+//                  answering → keep the lifecycle state unchanged so
+//                  the icon doesn't lie about Claude's actual state.
+export function advancePermissionQueue(
+  s: Session,
+  opts: { stateWhenEmpty: AppState | 'preserve' },
+): Session {
+  const [next, ...rest] = s.pendingPermissions
+  if (next) {
+    return {
+      ...s,
+      notification:       { type: 'permission' as const, ...next },
+      pendingPermissions: rest,
+      state:              'waiting' as const,
+      lastActivityAt:     Date.now(),
+    }
+  }
+  return {
+    ...s,
+    notification:       null,
+    pendingPermissions: [],
+    state:              opts.stateWhenEmpty === 'preserve' ? s.state : opts.stateWhenEmpty,
+    lastActivityAt:     Date.now(),
+  }
 }
 
 // Strip "Claude " prefix and look up in MODELS_INFO; returns '' if not found
@@ -39,6 +215,7 @@ function sessionFromRestored(data: SessionRestored): Session {
     reset7dAt:     0,
     state:         'idle',
     notification:  null,
+    pendingPermissions: [],
     lastActivityAt: now,
     mode:          data.mode,
     origin:        data.origin,
@@ -72,7 +249,30 @@ export function App(): JSX.Element {
   const [pendingCodexSwitch, setPendingCodexSwitch] = useState<{ modelId: string } | null>(null)
   const [pendingEngineWorkspace, setPendingEngineWorkspace] = useState<string | null>(null)
   const [newSessionBusy, setNewSessionBusy]   = useState(false)
+  const [showQuitConfirm, setShowQuitConfirm] = useState(false)
   const [backgroundNotification, setBackgroundNotification] = useState<SessionNotification | null>(null)
+  // Showing the Settings sub-panel inside the expanded panel. Lifted out of
+  // Island.tsx so window-bounds computation in non-default overlay modes can
+  // see it (otherwise the bounds effect would not know to budget the 840px
+  // tall settings height).
+  const [showSettings, setShowSettings] = useState(false)
+  // --- Overlay mode (hide-to-top / shrink-to-corner) -----------------------
+  const [overlayMode, setOverlayMode] = useState<OverlayMode>('default')
+  // top-hidden: the pill is "peeking out" right now. Driven by hover on the
+  // strip, by the presence of a notification, or by expanded === true. The
+  // window also resizes from strip → pill while this is true.
+  const [overlayPeek, setOverlayPeek] = useState(false)
+  const [dragState,   setDragState]   = useState<DragState | null>(null)
+  const [workArea,    setWorkArea]    = useState<WorkArea | null>(null)
+  // Corner-mode "Session complete" banner auto-hides 3s after state→done.
+  // Tracked here so the corner banner condition can fall back to a bare
+  // circle once the timeout fires. Resets on mode-change or state-change.
+  const [cornerDoneExpired, setCornerDoneExpired] = useState(false)
+  // Corner-mode "待回答" (waiting) banner can be dismissed by clicking the
+  // circle. Once dismissed, stays bare until the next state transition —
+  // the assistant-msg fallback (HookServer) sometimes lags so this gives
+  // the user an explicit "我知道了" affordance.
+  const [cornerWaitingDismissed, setCornerWaitingDismissed] = useState(false)
   // Chunk E — DeepSeek balance + per-session token usage. Map keys are
   // providerId for balance (one stream per provider) and sessionId for
   // usage (one stream per session).
@@ -227,11 +427,355 @@ export function App(): JSX.Element {
     return () => clearTimeout(t)
   }, [isSwitchingModel])
 
-  // Grow the pill window so the QR popup is not clipped at the bottom.
-  // Tall enough for: pill (36) + expanded panel (~250) + margin + popup (~440).
+  // Collapsing the expanded panel dismisses the Settings sub-panel — same
+  // semantics as when Island.tsx owned this flag locally; lifted up so the
+  // bounds calc can see settings height.
   useEffect(() => {
-    window.ccc?.setMainHeight(remotePopupSessionId !== null ? 820 : null)
-  }, [remotePopupSessionId])
+    if (!expanded && showSettings) setShowSettings(false)
+  }, [expanded, showSettings])
+
+  // Fetch the primary display's work area once on mount. Renderer needs
+  // this in screen coords so drag/snap math is right on multi-monitor or
+  // taskbar-offset setups. Re-fetched only on hard restart (workArea won't
+  // change at runtime in practice).
+  useEffect(() => {
+    let cancelled = false
+    void (async () => {
+      try {
+        const wa = await window.ccc?.getWorkArea()
+        if (!cancelled && wa) setWorkArea(wa)
+      } catch { /* fall back to no overlay-mode UI */ }
+    })()
+    return () => { cancelled = true }
+  }, [])
+
+  // Target window bounds — derived from the full overlay state. Single source
+  // of truth so we can't end up with a 6×96 strip showing a 400×520 pill or
+  // vice versa. Drag mode goes through a separate effect (window is sized to
+  // the full work area for the duration of the drag so the pill can float to
+  // any cursor position).
+  const overlayActiveSession   = sessions.find(s => s.id === activeId) ?? sessions[0] ?? null
+  const overlayNotification: SessionNotification | null =
+    overlayActiveSession?.notification ?? backgroundNotification
+  const overlayState: AppState = overlayActiveSession?.state ?? 'idle'
+  // 3-second auto-hide for the corner "Session complete" banner. The timer
+  // is armed ONLY on a state→done transition; mode changes never re-arm
+  // it. That means dragging corner → default → corner while still on a
+  // done state goes straight to the bare circle (the banner already had
+  // its 3s in whichever mode the user was in when done fired). The next
+  // banner appears only on the NEXT done transition.
+  //
+  // overlayMode and cornerDoneExpired are intentionally NOT in deps:
+  //   - overlayMode in deps would re-arm on mode change (the bug above).
+  //   - cornerDoneExpired in deps would loop: timer sets it true, effect
+  //     re-runs, sets it back to false, starts new timer (a previous bug).
+  // The single dep [overlayState] is sufficient: state change to/from done
+  // is the only event that should toggle the armed timer.
+  useEffect(() => {
+    if (overlayState !== 'done') {
+      setCornerDoneExpired(false)
+      return
+    }
+    setCornerDoneExpired(false)
+    const t = window.setTimeout(() => setCornerDoneExpired(true), 3000)
+    return () => window.clearTimeout(t)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [overlayState])
+  // Reset waiting-dismiss whenever state changes — so a brand-new
+  // waiting transition (post-streaming → next question) shows the banner
+  // again, even if the user had dismissed the previous one. Same
+  // single-dep policy as cornerDoneExpired above.
+  useEffect(() => {
+    setCornerWaitingDismissed(false)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [overlayState])
+  const hasCornerHint =
+    overlayMode === 'corner-shrunk'
+    && ((overlayState === 'waiting'
+         || (overlayState === 'done' && !cornerDoneExpired))
+        || overlayNotification !== null)
+
+  const targetBounds: Bounds | null = useMemo(() => {
+    if (!workArea) return null
+    if (dragState) {
+      return { x: workArea.x, y: workArea.y, width: workArea.width, height: workArea.height }
+    }
+    // ── Single overlay-window architecture ──
+    // All non-drag modes share ONE BrowserWindow: full work-area width, at
+    // the top of the work area. CSS positions visible content (pill, strip,
+    // circle, expanded panel) inside this window. Modes never trigger a
+    // window resize/reposition — only the *height* grows to accommodate
+    // expand/notification/picker, which is the only resize the user sees.
+    //
+    // Why: small transparent BrowserWindows on macOS (e.g. the previous
+    // 78×78 corner mode) hit Electron+CoreAnimation edge cases where the
+    // un-painted area renders as the OS default background (white in
+    // Light mode). A wide window with most of its pixels painted alpha=0
+    // by the renderer chain avoids that path entirely.
+    const h = computePillHeight({
+      expanded, showSettings, showModelPicker,
+      notification: overlayNotification, remotePopupSessionId,
+      pendingEngineWorkspace: pendingEngineWorkspace !== null,
+      pendingApiSwitch:       pendingApiSwitch !== null,
+      pendingCodexSwitch:     pendingCodexSwitch !== null,
+      showQuitConfirm,
+    })
+    // Default + top-hidden: window height = pill height (60 collapsed,
+    // dynamic when expanded / picker open / notification budget added).
+    // Top-hidden needs a *vertical hover buffer*: the body's mouseleave
+    // drives auto-hide, and a 60px-tall window will fire mouseleave on
+    // even small downward cursor jitter past the pill (~y=46). 120px
+    // gives the user ~70px of forgiving area below the pill before the
+    // re-hide grace starts. Window stays transparent so the extra area
+    // doesn't visibly affect anything; click-passthrough is preserved.
+    if (overlayMode === 'default' || overlayMode === 'top-hidden') {
+      const minH = overlayMode === 'top-hidden' ? 120 : PILL_HEIGHT_BASE
+      return {
+        x: workArea.x, y: workArea.y,
+        width: workArea.width, height: Math.max(minH, h),
+      }
+    }
+    // corner-shrunk: window height = visible corner content + top inset +
+    // shadow space below. The .island sits at CSS top:CORNER_INSET, so we
+    // need enough vertical room for whatever variant is showing PLUS any
+    // app-level floating popup (engine picker, api/codex switch, quit
+    // confirm) stacked below it.
+    let popupBudget = 0
+    if (pendingEngineWorkspace !== null) popupBudget = Math.max(popupBudget, POPUP_ENGINE_PICKER)
+    if (pendingApiSwitch !== null)       popupBudget = Math.max(popupBudget, POPUP_API_SWITCH)
+    if (pendingCodexSwitch !== null)     popupBudget = Math.max(popupBudget, POPUP_CODEX_SWITCH)
+    if (showQuitConfirm)                 popupBudget = Math.max(popupBudget, POPUP_QUIT_CONFIRM)
+    const popupGap = popupBudget > 0 ? 6 : 0
+    let cornerHeight: number
+    if (expanded || showModelPicker || remotePopupSessionId !== null) {
+      // Expanded panel mode — the `.island` itself is full-sized (h
+      // already accounts for everything stacked inside the pill, including
+      // popup budgets via computePillHeight above).
+      cornerHeight = CORNER_INSET + h + SHADOW_PAD
+    } else if (hasCornerHint) {
+      const popupH = notifBudget(overlayNotification)
+      cornerHeight = CORNER_INSET + CORNER_SIZE + popupH + popupGap + popupBudget + SHADOW_PAD
+    } else {
+      cornerHeight = CORNER_INSET + CORNER_SIZE + popupGap + popupBudget + SHADOW_PAD
+    }
+    return {
+      x: workArea.x, y: workArea.y,
+      width: workArea.width, height: cornerHeight,
+    }
+  }, [workArea, dragState, overlayMode, overlayPeek, expanded, showSettings, showModelPicker, overlayNotification, remotePopupSessionId, hasCornerHint, pendingEngineWorkspace, pendingApiSwitch, pendingCodexSwitch, showQuitConfirm])
+
+  useEffect(() => {
+    if (!targetBounds) return
+    window.ccc?.setOverlayBounds(targetBounds)
+  }, [targetBounds])
+
+  // --- Long-press + drag mechanics -----------------------------------------
+  // Long-press starts the moment the user mousedowns the pill body (NOT the
+  // model-name button, NOT a ring hover target). After LONG_PRESS_MS without
+  // moving more than DRAG_THRESHOLD px, drag mode engages: the window goes
+  // fullscreen, the pill becomes position:fixed at the cursor, and snap
+  // zones light up. On mouseup, the pointer's hit-zone decides the resting
+  // overlayMode.
+  const longPressTimerRef    = useRef<number | null>(null)
+  const longPressStartRef    = useRef<{ x: number; y: number } | null>(null)
+  const dragStateRef         = useRef<DragState | null>(null)
+  const overlayModeRef       = useRef<OverlayMode>('default')
+  const workAreaRef          = useRef<WorkArea | null>(null)
+  const justDraggedRef       = useRef(false)
+  // Track the wall-clock of the last notification → null transition so the
+  // top-hidden auto-rehide grace can hold the pill out for 2 s after the
+  // popup goes away (per the spec).
+  const lastNotifClearedAtRef = useRef<number | null>(null)
+
+  useEffect(() => { dragStateRef.current   = dragState   }, [dragState])
+  useEffect(() => { overlayModeRef.current = overlayMode }, [overlayMode])
+  useEffect(() => { workAreaRef.current    = workArea    }, [workArea])
+
+  const cancelLongPress = useCallback((): void => {
+    if (longPressTimerRef.current !== null) {
+      window.clearTimeout(longPressTimerRef.current)
+      longPressTimerRef.current = null
+    }
+    longPressStartRef.current = null
+  }, [])
+
+  const handlePillPointerDown = useCallback((e: ReactMouseEvent): void => {
+    // Drag is disabled while expanded — user said "展开状态无法移动".
+    if (expanded || showModelPicker) return
+    // Don't trigger from clicks on the model picker button (which is its
+    // own action) or on a ring hover target. The pill body is everything
+    // else inside .island-pill.
+    const t = e.target as HTMLElement
+    if (t.closest('.model-name-btn') || t.closest('.ring-hover-target') || t.closest('.usage-cost-badge')) return
+    if (e.button !== 0) return  // left-click only
+    const startClientX = e.clientX
+    const startClientY = e.clientY
+    // Snapshot the window's screen position right now. The window is about
+    // to be resized when drag engages, which changes window.screenX/Y, so
+    // we can't recompute screen coords for the start point after the fact.
+    const startWinScreenX = window.screenX
+    const startWinScreenY = window.screenY
+    // Cursor offset within the pill's bounding box — render-time pins the
+    // pill at (cursor − offset) so wherever the user grabbed (the state
+    // icon on the left, the ring on the right, etc.) stays under the
+    // cursor for the entire drag. Without this the pill snaps so its
+    // center jumps to the cursor at drag-engage.
+    const pillEl = (e.currentTarget as HTMLElement).closest<HTMLElement>('.island')
+    const pillRect = pillEl?.getBoundingClientRect()
+    const offsetX = pillRect ? startClientX - pillRect.left : 0
+    const offsetY = pillRect ? startClientY - pillRect.top  : 0
+    longPressStartRef.current = { x: startClientX, y: startClientY }
+    longPressTimerRef.current = window.setTimeout(() => {
+      // Long-press fired — engage drag mode.
+      longPressTimerRef.current = null
+      const wa = workAreaRef.current
+      if (!wa) return
+      // Convert from old-window-local to screen coords using the window
+      // position captured at mousedown.
+      const screenX = startWinScreenX + startClientX
+      const screenY = startWinScreenY + startClientY
+      setDragState({
+        fromMode:  overlayModeRef.current,
+        screenX,
+        screenY,
+        offsetX,
+        offsetY,
+        hoverZone: classifyHoverZone(screenX, screenY, wa),
+      })
+    }, LONG_PRESS_MS)
+  }, [expanded, showModelPicker])
+
+  // Document-level move/up: track pointer for long-press cancellation +
+  // drag tracking. Always mounted so the listeners are stable.
+  useEffect(() => {
+    const onMove = (e: MouseEvent): void => {
+      // Cancel pending long-press if the user moved before the timer fired
+      // (treat that as a normal click-drag, not a long-press).
+      const start = longPressStartRef.current
+      if (start && longPressTimerRef.current !== null) {
+        const dx = e.clientX - start.x
+        const dy = e.clientY - start.y
+        if (dx * dx + dy * dy > DRAG_THRESHOLD * DRAG_THRESHOLD) cancelLongPress()
+      }
+      // Update drag position once engaged. Window is fullscreen-sized during
+      // drag, so window.screenX/Y track workArea.x/y and we can derive
+      // screen coords from e.clientX/Y consistently.
+      const cur = dragStateRef.current
+      if (cur) {
+        const wa = workAreaRef.current
+        const screenX = window.screenX + e.clientX
+        const screenY = window.screenY + e.clientY
+        const zone = wa ? classifyHoverZone(screenX, screenY, wa) : null
+        setDragState({ ...cur, screenX, screenY, hoverZone: zone })
+      }
+    }
+    const onUp = (e: MouseEvent): void => {
+      cancelLongPress()
+      const cur = dragStateRef.current
+      if (!cur) return
+      const wa = workAreaRef.current
+      const screenX = window.screenX + e.clientX
+      const screenY = window.screenY + e.clientY
+      const zone = wa ? classifyHoverZone(screenX, screenY, wa) : null
+      // Dropping outside every zone reverts to whichever mode the drag
+      // started from — never lose the prior mode by accident.
+      const nextMode: OverlayMode =
+        zone === 'top'     ? 'top-hidden'    :
+        zone === 'corner'  ? 'corner-shrunk' :
+        zone === 'default' ? 'default'       :
+        cur.fromMode
+      // Suppress the trailing click that follows mouseup so the pill doesn't
+      // immediately toggle expand after a drag.
+      justDraggedRef.current = true
+      window.setTimeout(() => { justDraggedRef.current = false }, 150)
+      setDragState(null)
+      setOverlayMode(nextMode)
+      // Entering a new mode resets peek — pill starts collapsed and any
+      // hover/notif logic re-opens it from scratch.
+      setOverlayPeek(false)
+    }
+    document.addEventListener('mousemove', onMove)
+    document.addEventListener('mouseup', onUp)
+    return () => {
+      document.removeEventListener('mousemove', onMove)
+      document.removeEventListener('mouseup', onUp)
+    }
+  }, [cancelLongPress])
+
+  // Auto-peek for top-hidden mode:
+  //   - When a notification fires: peek out (pill + popup visible).
+  //   - 2 s after the notification clears AND the user isn't hovering and
+  //     hasn't expanded: re-hide to strip.
+  // Hover is the other peek trigger and is wired through the strip element
+  // directly (setOverlayPeek(true) on enter, leave starts a short fade).
+  useEffect(() => {
+    if (overlayMode !== 'top-hidden') {
+      lastNotifClearedAtRef.current = null
+      return
+    }
+    if (overlayNotification !== null) {
+      setOverlayPeek(true)
+      lastNotifClearedAtRef.current = null
+      return
+    }
+    // Notification just cleared → start 2s grace, then re-hide unless
+    // the user kept the pill out via hover/expand.
+    lastNotifClearedAtRef.current = Date.now()
+    const t = window.setTimeout(() => {
+      if (overlayModeRef.current !== 'top-hidden') return
+      if (expanded || showModelPicker) return
+      setOverlayPeek(false)
+    }, 2000)
+    return () => window.clearTimeout(t)
+  }, [overlayMode, overlayNotification, expanded, showModelPicker])
+
+  // Top-hidden peek detection. The BrowserWindow stays pill-sized (no resize)
+  // and is in passthrough mode while peek=false (setIgnoreMouseEvents(true,
+  // forward:true)). With forward:true the renderer still receives DOM mouse
+  // events for cursor positions inside the window — so we can use plain
+  // document-level enter/leave on the body element:
+  //   - Cursor enters the window → peek = true (pill slides in).
+  //   - Cursor leaves the window → peek = false after a 280ms grace so a
+  //     momentary off-by-1 at the screen edge doesn't snap it back.
+  // Mid-window stillness keeps peek=true (no timer running unless leave
+  // actually fires), which is the property that was missing in the
+  // previous strip-mouseenter/timeout-based implementation.
+  useEffect(() => {
+    if (overlayMode !== 'top-hidden') return
+    let leaveTimer: number | null = null
+    const onEnter = (): void => {
+      if (leaveTimer !== null) {
+        window.clearTimeout(leaveTimer)
+        leaveTimer = null
+      }
+      setOverlayPeek(true)
+    }
+    const onLeave = (): void => {
+      if (leaveTimer !== null) window.clearTimeout(leaveTimer)
+      leaveTimer = window.setTimeout(() => {
+        // Don't auto-hide if there's still a reason for the pill to be out:
+        // active notification, expanded panel, model picker open, etc.
+        // 500ms grace (was 280) so a quick out-and-back-in motion doesn't
+        // visibly flicker the pill — that was the "突然消失" the user hit.
+        if (overlayModeRef.current !== 'top-hidden') return
+        if (expanded || showModelPicker || remotePopupSessionId !== null) return
+        setOverlayPeek(false)
+      }, 500)
+    }
+    document.body.addEventListener('mouseenter', onEnter)
+    document.body.addEventListener('mouseleave', onLeave)
+    return () => {
+      document.body.removeEventListener('mouseenter', onEnter)
+      document.body.removeEventListener('mouseleave', onLeave)
+      if (leaveTimer !== null) window.clearTimeout(leaveTimer)
+    }
+  }, [overlayMode, expanded, showModelPicker, remotePopupSessionId])
+
+  // Stub callbacks the Island still expects on the strip — they're inert
+  // now that body-level enter/leave drives peek state, but keeping the
+  // props lets Island's render path stay simple.
+  const handleStripPointerEnter = useCallback((): void => { /* handled at body level */ }, [])
+  const handleOverlayPointerLeave = useCallback((): void => { /* handled at body level */ }, [])
 
   useEffect(() => {
     const releaseIfPointerIsOutsideCcc = (): void => {
@@ -307,8 +851,31 @@ export function App(): JSX.Element {
         // When `state` is omitted (e.g. notification-only updates), keep the
         // session's current lifecycle state — don't accidentally flip to busy.
         const nextState = update.state ?? s.state
+
+        // Permission incoming: if there's already a permission being shown,
+        // queue the new one behind it (parallel-tool-call case). Otherwise
+        // it replaces whatever info-only popup was up. Without this queue
+        // the second parallel permission silently overwrites the first;
+        // the user sees only the latest popup and the earlier hooks
+        // auto-allow via server-side timeout.
+        if (update.permission) {
+          if (s.notification?.type === 'permission') {
+            return {
+              ...s,
+              state:               nextState,
+              pendingPermissions:  [...s.pendingPermissions, update.permission],
+              lastActivityAt:      Date.now(),
+            }
+          }
+          return {
+            ...s,
+            state:           nextState,
+            notification:    { type: 'permission', ...update.permission },
+            lastActivityAt:  Date.now(),
+          }
+        }
+
         const notification: SessionNotification | null =
-          update.permission ? { type: 'permission', ...update.permission } :
           update.message    ? { type: 'message',    message: update.message } :
           update.state === 'done' ? { type: 'done' } :
           // No explicit notification-bearing field and no lifecycle change →
@@ -404,13 +971,22 @@ export function App(): JSX.Element {
     pendingEngineWorkspace !== null ||
     notification !== null
 
+  // When to ALWAYS capture the mouse (no passthrough to the underlying app),
+  // regardless of where the cursor sits. Under the single-window architecture
+  // every non-drag mode shares a full work-area-wide BrowserWindow, so the
+  // visible chrome is a small slice and the rest of the window MUST stay
+  // passthrough — otherwise we'd block clicks across the whole top of the
+  // user's screen. Capture-always is therefore only for drag mode (where the
+  // entire fullscreen canvas is interactive snap-zone territory).
+  const overlayCapturesAlways = dragState !== null
+
   useEffect(() => {
-    if (hasInteractiveOverlay) {
+    if (hasInteractiveOverlay || overlayCapturesAlways) {
       captureMouseForCcc()
       return
     }
     releaseMousePassthroughUnlessPointerOverCcc()
-  }, [captureMouseForCcc, hasInteractiveOverlay, releaseMousePassthroughUnlessPointerOverCcc])
+  }, [captureMouseForCcc, hasInteractiveOverlay, overlayCapturesAlways, releaseMousePassthroughUnlessPointerOverCcc])
 
   // Codex models exposed in the picker only when Codex CLI is installed and
   // logged in; otherwise the picker hides the Codex row.
@@ -444,6 +1020,28 @@ export function App(): JSX.Element {
     releaseMousePassthrough()
   }
 
+  // Quit-confirm popup: opening it collapses every nested sub-panel /
+  // floating popup so the user sees only the expanded pill + the
+  // confirm popup directly below it. The session list stays so the
+  // user can read the count from the popup against the rows above.
+  const openQuitConfirm = (): void => {
+    setShowModelPicker(false)
+    setRemotePopupSessionId(null)
+    setPendingApiSwitch(null)
+    setPendingCodexSwitch(null)
+    setPendingEngineWorkspace(null)
+    setBackgroundNotification(null)
+    setShowQuitConfirm(true)
+  }
+
+  const cancelQuitConfirm = (): void => {
+    setShowQuitConfirm(false)
+  }
+
+  const confirmQuit = (): void => {
+    window.ccc?.quitApp()
+  }
+
   const handleAction = (action: ActionType): void => {
     if (action === 'stop') {
       sessions.forEach(s => window.ccc?.killSession(s.id))
@@ -461,11 +1059,13 @@ export function App(): JSX.Element {
     }
   }
 
-  // Only clears the popup — does NOT reset state so the icon persists
+  // Only clears the popup — does NOT reset state so the icon persists.
+  // When the queue has another permission waiting, advance to it instead
+  // of going blank.
   const dismissNotif = useCallback((): void => {
     if (activeSession?.notification) {
       setSessions(prev => prev.map(s =>
-        s.id === activeId ? { ...s, notification: null } : s
+        s.id === activeId ? advancePermissionQueue(s, { stateWhenEmpty: 'preserve' }) : s
       ))
       return
     }
@@ -475,7 +1075,7 @@ export function App(): JSX.Element {
   const hookDecision = (hookKey: string, exitCode: number): void => {
     window.ccc?.sendHookDecision(hookKey, exitCode)
     setSessions(prev => prev.map(s =>
-      s.id === activeId ? { ...s, notification: null, state: 'streaming' as const } : s
+      s.id === activeId ? advancePermissionQueue(s, { stateWhenEmpty: 'streaming' }) : s
     ))
   }
 
@@ -489,7 +1089,7 @@ export function App(): JSX.Element {
       window.ccc?.sendHookDecision(hookKey, 0)
     }, 150)
     setSessions(prev => prev.map(s =>
-      s.id === activeId ? { ...s, notification: null, state: 'streaming' as const } : s
+      s.id === activeId ? advancePermissionQueue(s, { stateWhenEmpty: 'streaming' }) : s
     ))
   }, [activeId])
 
@@ -499,7 +1099,7 @@ export function App(): JSX.Element {
     }
     window.ccc?.sendHookDecision(hookKey, 0)
     setSessions(prev => prev.map(s =>
-      s.id === activeId ? { ...s, notification: null, state: 'streaming' as const } : s
+      s.id === activeId ? advancePermissionQueue(s, { stateWhenEmpty: 'streaming' }) : s
     ))
   }, [activeId])
 
@@ -521,6 +1121,7 @@ export function App(): JSX.Element {
       reset7dAt:     0,
       state:         'idle',
       notification:  null,
+      pendingPermissions: [],
       lastActivityAt: Date.now(),
       mode:          'anthropic',
     }
@@ -552,6 +1153,7 @@ export function App(): JSX.Element {
       reset7dAt:      0,
       state:          'idle',
       notification:   null,
+      pendingPermissions: [],
       lastActivityAt: now,
       mode:           'codex',
       codexModelId:   modelId,
@@ -707,6 +1309,7 @@ export function App(): JSX.Element {
         reset7dAt:      0,
         state:          'idle',
         notification:   null,
+        pendingPermissions: [],
         lastActivityAt: Date.now(),
         mode:           'api',
         apiProviderId:  pendingApiSwitch.providerId,
@@ -768,15 +1371,42 @@ export function App(): JSX.Element {
     window.ccc?.focusSession(id)
   }
 
+  const openHarness = (id: number): void => {
+    const s = sessions.find(x => x.id === id)
+    if (s) window.ccc?.openHarnessWindow(s.workspace)
+  }
+
   const openRemote     = (id: number): void => setRemotePopupSessionId(id)
   const closeRemote    = (): void => setRemotePopupSessionId(null)
   const activateRemote = (id: number): void => {
     window.ccc?.injectConsoleText(id, '/remote-control')
   }
 
+  const wrapperClass = [
+    'island-wrapper',
+    overlayMode !== 'default' ? `island-wrapper--${overlayMode}` : '',
+    // In top-hidden mode the BrowserWindow stays pill-sized; CSS uses the
+    // .island-wrapper--peek class to toggle strip-only vs pill display.
+    // Without this class the strip is shown; with it the pill appears.
+    overlayMode === 'top-hidden' && overlayPeek ? 'island-wrapper--peek' : '',
+    dragState ? 'island-wrapper--dragging' : '',
+  ].filter(Boolean).join(' ')
+
+  // Convert drag screen coords to window-local for Island's `position: fixed`
+  // pill. During drag the BrowserWindow is fullscreen at workArea.x/y, so
+  // local = screen - workArea origin. Subtract the grab-offset so the pill's
+  // top-left edge sits at (cursor − offset) — the point the user grabbed
+  // stays pinned under the cursor.
+  const islandDragState = dragState && workArea ? {
+    fromMode:  dragState.fromMode,
+    pointerX:  dragState.screenX - workArea.x - dragState.offsetX,
+    pointerY:  dragState.screenY - workArea.y - dragState.offsetY,
+    hoverZone: dragState.hoverZone,
+  } : null
+
   return (
     <div
-      className="island-wrapper"
+      className={wrapperClass}
       ref={wrapperRef}
       onMouseEnter={handleMouseEnter}
       onMouseDown={rememberPointer}
@@ -805,7 +1435,35 @@ export function App(): JSX.Element {
         apiProviders={apiProviders}
         apiBalances={apiBalances}
         apiUsage={apiUsage}
+        overlayMode={overlayMode}
+        overlayPeek={overlayPeek}
+        cornerDoneExpired={cornerDoneExpired}
+        cornerWaitingDismissed={cornerWaitingDismissed}
+        dragState={islandDragState}
+        showSettings={showSettings}
+        onToggleSettings={() => setShowSettings(s => !s)}
+        onPillPointerDown={handlePillPointerDown}
+        onStripPointerEnter={handleStripPointerEnter}
+        onOverlayPointerLeave={handleOverlayPointerLeave}
         onToggleExpand={() => {
+          // Suppress the click that comes right after a drag-release so
+          // dropping the pill back at top-center doesn't immediately open
+          // the panel.
+          if (justDraggedRef.current) return
+          // User-driven dismiss for the corner-mode waiting banner. If
+          // the user clicks the circle while "待回答" is showing, treat
+          // it as "我知道了" — collapse to a bare circle and don't expand.
+          // The reset effect above will re-arm the banner on the next
+          // state transition.
+          if (
+            overlayMode === 'corner-shrunk'
+            && !expanded
+            && overlayState === 'waiting'
+            && !cornerWaitingDismissed
+          ) {
+            setCornerWaitingDismissed(true)
+            return
+          }
           setShowModelPicker(false)
           setExpanded(e => !e)
           void reloadApiProviders()
@@ -826,10 +1484,12 @@ export function App(): JSX.Element {
         onRemoveSession={removeSession}
         onRenameSession={renameSession}
         onSelectSession={selectSession}
+        onOpenHarness={openHarness}
         onOpenRemote={openRemote}
         onCloseRemote={closeRemote}
         onActivateRemote={activateRemote}
         onAction={handleAction}
+        onQuit={openQuitConfirm}
         onDismissNotif={dismissNotif}
         onHookDecision={hookDecision}
         onAllowAlways={allowAlways}
@@ -861,6 +1521,14 @@ export function App(): JSX.Element {
           onSelectClaude={() => void confirmNewSessionClaude()}
           onSelectCodex={() => void confirmNewSessionCodex()}
           onCancel={cancelNewSessionEngine}
+        />
+      )}
+
+      {showQuitConfirm && (
+        <QuitConfirmPopup
+          sessionCount={sessions.length}
+          onConfirm={confirmQuit}
+          onCancel={cancelQuitConfirm}
         />
       )}
     </div>

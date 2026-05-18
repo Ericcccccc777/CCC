@@ -10,9 +10,12 @@ const QUESTION_PIXELS: ReadonlyArray<readonly [number, number]> = [
   [7,12],[7,13],
 ]
 
+// Shifted up by 2px (y: 5–13 → 3–11) so the check sits visually centered
+// inside the 16×16 viewBox instead of biased low. The corner-shrunk circle
+// shares this geometry so the icon lands in the same spot in both forms.
 const CHECK_PIXELS: ReadonlyArray<readonly [number, number]> = [
-  [1,9],[3,11],[5,13],
-  [7,11],[9,9],[11,7],[13,5],
+  [1,7],[3,9],[5,11],
+  [7,9],[9,7],[11,5],[13,3],
 ]
 
 interface StateIconProps {

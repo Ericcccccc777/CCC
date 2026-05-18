@@ -238,7 +238,12 @@ class HookServerTimeoutTests {
           terminalAwaiting: Set<number>
         }).terminalAwaiting.has(sessionId)
 
-      it('user-role message clears terminalAwaiting (tool_result arrives → user has interacted)', () => {
+      it('user-role message clears terminalAwaiting AND pushes state=streaming for the auto-dismiss flow', () => {
+        // When the AskUserQuestion popup timed out and the user then
+        // answered in the terminal, the transcript records a user-role
+        // entry. The watcher both clears the awaiting flag AND emits
+        // state=streaming so the renderer drops the stale popup
+        // immediately — see HookServer.processTranscriptLine.
         setTerminalAwaiting(1)
         expect(isTerminalAwaiting(1)).toBe(true)
 
@@ -250,30 +255,55 @@ class HookServerTimeoutTests {
           },
         }))
         expect(isTerminalAwaiting(1)).toBe(false)
+        expect(sent).toEqual([{ sessionId: 1, state: 'streaming' }])
+      })
+
+      it('user-msg without terminalAwaiting does NOT emit (avoid spurious state churn)', () => {
+        // If terminalAwaiting was never set (e.g. user answered in CCC
+        // popup before the 30s timeout, or this is just a regular
+        // assistant→tool_result→user turn), the user-msg arrival should
+        // be silent — no extra state update.
+        expect(isTerminalAwaiting(1)).toBe(false)
+        callProcess(1, JSON.stringify({
+          type: 'user', message: { role: 'user', content: [] },
+        }))
         expect(sent).toEqual([])
       })
 
-      it('assistant message AFTER user-msg cleared terminalAwaiting flips to streaming', () => {
+      it('assistant message AFTER terminalAwaiting cleared also flips to streaming', () => {
         setTerminalAwaiting(1)
 
-        // tool_result arrives → flag cleared, no state emit
+        // tool_result arrives → flag cleared, also emits state=streaming
         callProcess(1, JSON.stringify({
           type: 'user', message: { role: 'user', content: [] },
         }))
 
-        // Subsequent assistant text → flips to streaming naturally
+        // Subsequent assistant text → flips to streaming (idempotent —
+        // the renderer treats duplicate state updates as no-ops).
         callProcess(1, JSON.stringify({
           type: 'assistant', message: { role: 'assistant', content: 'hi' },
         }))
-        expect(sent).toEqual([{ sessionId: 1, state: 'streaming' }])
+        expect(sent).toEqual([
+          { sessionId: 1, state: 'streaming' },
+          { sessionId: 1, state: 'streaming' },
+        ])
       })
 
-      it('assistant message while terminalAwaiting still set is suppressed (no user-msg yet)', () => {
+      it('assistant message while terminalAwaiting set is now the FALLBACK: clears flag + flips to streaming', () => {
+        // DECISION_LOG 2026-05-17-3 option B. The old behavior (suppress
+        // assistant→streaming while terminalAwaiting set) was supposed to
+        // hold the `?` icon until the user-msg branch cleared the flag,
+        // but observed Claude Code transcripts didn't always emit a
+        // user-msg the watcher could match. assistant-msg is a strict
+        // superset of "user has answered" (Claude only writes assistant
+        // continuations after a user response), so we clear the flag and
+        // flip to streaming here too.
         setTerminalAwaiting(1)
         callProcess(1, JSON.stringify({
           type: 'assistant', message: { role: 'assistant', content: 'hi' },
         }))
-        expect(sent).toEqual([])
+        expect(sent).toEqual([{ sessionId: 1, state: 'streaming' }])
+        expect(isTerminalAwaiting(1)).toBe(false)
       })
     })
 

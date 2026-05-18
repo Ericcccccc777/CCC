@@ -16,6 +16,13 @@ export interface Translations {
   newSession:     string
   stopAll:        string
   settings:       string
+  // Quit-app button (Settings row, third button) + confirm popup
+  quitApp:               string
+  quitConfirmTitle:      string
+  quitConfirmBody:       string
+  quitConfirmBodyN:      (count: number) => string
+  quitConfirmAction:     string
+  quitConfirmCancel:     string
   // Settings panel
   language:       string
   // Settings → API zone
@@ -98,6 +105,15 @@ export interface Translations {
   accessibilityBannerTitle: string
   accessibilityBannerHint:  string
   accessibilityBannerBtn:   string
+  // Corner-shrunk overlay text-bar (only shown when state == waiting or done
+  // and overlayMode == 'corner-shrunk'; doesn't replace the popup, which
+  // still surfaces the full question on click).
+  overlayCornerQuestion: string
+  overlayCornerDone:     string
+  // Drop-zone labels shown during long-press drag.
+  overlayDropCorner:     string
+  overlayDropHide:       string
+  overlayDropDefault:    string
   // Notifications
   responseComplete:   string
   claudeIsAsking:     string
@@ -203,6 +219,12 @@ const en: Translations = {
   newSession:     'New Session',
   stopAll:        'Stop All',
   settings:       'Settings',
+  quitApp:               'Quit',
+  quitConfirmTitle:      'Quit CCC?',
+  quitConfirmBody:       'Close CCC and exit completely?',
+  quitConfirmBodyN:      n => `This will close ${n} active session${n === 1 ? '' : 's'} and exit CCC.`,
+  quitConfirmAction:     'Quit',
+  quitConfirmCancel:     'Cancel',
   language:       'Language',
   api:                 'API',
   apiAddDeepseek:      '+ Add DeepSeek',
@@ -279,6 +301,11 @@ const en: Translations = {
   accessibilityBannerTitle: 'macOS Accessibility permission required',
   accessibilityBannerHint:  'Open System Settings → Privacy & Security → Accessibility, then enable CCC. Without it, model switching and message replies silently fail.',
   accessibilityBannerBtn:   'Open System Settings',
+  overlayCornerQuestion: 'Question pending',
+  overlayCornerDone:     'Session complete',
+  overlayDropCorner:     'Corner',
+  overlayDropHide:       'Hide',
+  overlayDropDefault:    'Default',
   responseComplete:   'Response complete',
   claudeIsAsking:     'Claude is asking',
   permissionRequired: 'Permission Required',
@@ -380,6 +407,12 @@ const zh: Translations = {
   newSession:     '新建会话',
   stopAll:        '全部停止',
   settings:       '设置',
+  quitApp:               '退出',
+  quitConfirmTitle:      '退出 CCC?',
+  quitConfirmBody:       '关闭 CCC 并完全退出?',
+  quitConfirmBodyN:      n => `这将关闭 ${n} 个进行中的会话并退出 CCC。`,
+  quitConfirmAction:     '退出',
+  quitConfirmCancel:     '取消',
   language:       '语言',
   api:                 'API',
   apiAddDeepseek:      '+ 添加 DeepSeek',
@@ -456,6 +489,11 @@ const zh: Translations = {
   accessibilityBannerTitle: '需要 macOS 辅助功能权限',
   accessibilityBannerHint:  '打开"系统设置 → 隐私与安全性 → 辅助功能"，然后启用 CCC。未授权时，切换模型和回复消息会静默失败。',
   accessibilityBannerBtn:   '打开系统设置',
+  overlayCornerQuestion: '待回答',
+  overlayCornerDone:     '已完成',
+  overlayDropCorner:     '角落',
+  overlayDropHide:       '隐藏',
+  overlayDropDefault:    '默认',
   responseComplete:   '响应完成',
   claudeIsAsking:     'Claude 正在询问',
   permissionRequired: '需要授权',
@@ -557,6 +595,12 @@ const ko: Translations = {
   newSession:     '새 세션',
   stopAll:        '모두 중지',
   settings:       '설정',
+  quitApp:               '종료',
+  quitConfirmTitle:      'CCC 종료?',
+  quitConfirmBody:       'CCC를 닫고 완전히 종료하시겠습니까?',
+  quitConfirmBodyN:      n => `진행 중인 ${n}개 세션을 닫고 CCC를 종료합니다.`,
+  quitConfirmAction:     '종료',
+  quitConfirmCancel:     '취소',
   language:       '언어',
   api:                 'API',
   apiAddDeepseek:      '+ DeepSeek 추가',
@@ -633,6 +677,11 @@ const ko: Translations = {
   accessibilityBannerTitle: 'macOS 손쉬운 사용 권한 필요',
   accessibilityBannerHint:  '시스템 설정 → 개인정보 보호 및 보안 → 손쉬운 사용에서 CCC를 활성화하세요. 권한 없이는 모델 전환과 답장이 조용히 실패합니다.',
   accessibilityBannerBtn:   '시스템 설정 열기',
+  overlayCornerQuestion: '답변 대기',
+  overlayCornerDone:     '완료됨',
+  overlayDropCorner:     '구석',
+  overlayDropHide:       '숨김',
+  overlayDropDefault:    '기본',
   responseComplete:   '응답 완료',
   claudeIsAsking:     'Claude가 묻습니다',
   permissionRequired: '권한 필요',

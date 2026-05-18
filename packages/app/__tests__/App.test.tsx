@@ -1,6 +1,19 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
-import { App } from '../src/renderer/src/App'
+import { App, advancePermissionQueue } from '../src/renderer/src/App'
+import type { Session } from '../src/renderer/src/types'
+
+const baseSession: Session = {
+  id: 1, name: 's', workspace: '/x', modelId: 'm', model: 'M',
+  contextPct: 0, usagePct: 0, weeklyPct: 0, reset5hAt: 0, reset7dAt: 0,
+  state: 'waiting',
+  notification: { type: 'permission', hookKey: 'A', tool: 'Bash' },
+  pendingPermissions: [
+    { hookKey: 'B', tool: 'Read', toolInput: {} },
+    { hookKey: 'C', tool: 'Write', toolInput: {} },
+  ],
+  lastActivityAt: 0, mode: 'anthropic',
+}
 
 class AppTests {
   static resetBridge(): void {
@@ -289,6 +302,43 @@ class AppTests {
         expect(screen.getByText('two')).toBeDefined()
       })
 
+    })
+
+    // Pure unit tests for the parallel-permission queue helper. Renders
+    // no DOM — exercises the state-transition table directly.
+    describe('advancePermissionQueue (parallel permissions)', () => {
+      it('pops the head of the queue and keeps state=waiting when more remain', () => {
+        const result = advancePermissionQueue(baseSession, { stateWhenEmpty: 'streaming' })
+        expect(result.notification).toEqual({ type: 'permission', hookKey: 'B', tool: 'Read', toolInput: {} })
+        expect(result.pendingPermissions).toHaveLength(1)
+        expect(result.pendingPermissions[0]?.hookKey).toBe('C')
+        expect(result.state).toBe('waiting')
+      })
+
+      it('clears notification and flips to streaming when queue is empty (answer path)', () => {
+        const lonely: Session = { ...baseSession, pendingPermissions: [] }
+        const result = advancePermissionQueue(lonely, { stateWhenEmpty: 'streaming' })
+        expect(result.notification).toBeNull()
+        expect(result.pendingPermissions).toEqual([])
+        expect(result.state).toBe('streaming')
+      })
+
+      it('preserves state when queue is empty (dismiss path — icon must not lie)', () => {
+        const lonely: Session = { ...baseSession, pendingPermissions: [], state: 'waiting' }
+        const result = advancePermissionQueue(lonely, { stateWhenEmpty: 'preserve' })
+        expect(result.notification).toBeNull()
+        expect(result.state).toBe('waiting')
+      })
+
+      it('chained advance walks the full queue in order', () => {
+        const r1 = advancePermissionQueue(baseSession, { stateWhenEmpty: 'streaming' })
+        expect(r1.notification?.hookKey).toBe('B')
+        const r2 = advancePermissionQueue(r1, { stateWhenEmpty: 'streaming' })
+        expect(r2.notification?.hookKey).toBe('C')
+        const r3 = advancePermissionQueue(r2, { stateWhenEmpty: 'streaming' })
+        expect(r3.notification).toBeNull()
+        expect(r3.state).toBe('streaming')
+      })
     })
   }
 }

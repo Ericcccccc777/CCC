@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
-import type { AppState, Session, ModelInfo, ActionType, SessionNotification } from '../types'
+import type { CSSProperties, MouseEvent as ReactMouseEvent } from 'react'
+import type { AppState, OverlayMode, Session, ModelInfo, ActionType, SessionNotification } from '../types'
 import { useLang, useLangContext, LANG_LABELS } from '../i18n'
 import type { LangCode } from '../i18n'
 import { DEEPSEEK_MODELS, type ApiProviderId, type ApiProviderListEntry } from '../../../shared/api-provider'
@@ -26,6 +27,8 @@ export const MODELS_INFO: readonly ModelInfo[] = [
   { id: 'claude-opus-4-7',           switchAlias: 'opus',    name: 'Opus 4.7',   desc: 'Most capable' },
   { id: 'claude-haiku-4-5-20251001', switchAlias: 'haiku',   name: 'Haiku 4.5',  desc: 'Lightweight · Economy' },
 ]
+
+const HARNESS_BUTTON_VISIBLE = false
 
 interface ModelPickerStripProps {
   selectedModelId: string
@@ -201,6 +204,35 @@ function PixelCCC(): JSX.Element {
   )
 }
 
+// Snapshot of in-flight drag state from App.tsx. The pill's CSS position is
+// driven from pointerX/pointerY (window-local) while a drag is engaged;
+// hoverZone drives the snap-zone highlight.
+export interface IslandDragState {
+  fromMode:  OverlayMode
+  pointerX:  number
+  pointerY:  number
+  hoverZone: 'top' | 'corner' | 'default' | null
+}
+
+// Whether the NotificationPopup should be hidden for a given overlay mode +
+// notification type. Single source of truth for the per-mode rules; exposed
+// so the matching renderer tests can assert against the same table.
+//
+// Rule of thumb: in non-default modes, suppress popups that are purely
+// informational (done = "Response complete", message = background toast)
+// because the user opted out of pill-takeover and the corner-hint banner
+// already conveys the gist. KEEP actionable popups (permission, which
+// carries Yes/No/Always or a textarea reply) — the user must be able to
+// respond without switching modes.
+export function shouldSuppressNotifPopup(
+  mode:           OverlayMode,
+  notifType:      SessionNotification['type'],
+): boolean {
+  if (mode === 'default') return false
+  if (notifType === 'done' || notifType === 'message') return true
+  return false
+}
+
 interface IslandProps {
   state:            AppState
   model:            string
@@ -227,6 +259,25 @@ interface IslandProps {
   apiProviders:     readonly ApiProviderListEntry[]
   apiBalances:      Record<ApiProviderId, ApiBalanceSnapshot>
   apiUsage:         Record<number, ApiUsageSnapshot>
+  // Overlay-mode props (drag/hide/shrink). Default values keep this
+  // component backwards-compatible for tests that don't exercise the new
+  // surface.
+  overlayMode?:        OverlayMode
+  overlayPeek?:        boolean
+  // True once the 5s auto-hide timer for the corner "Session complete"
+  // banner has fired. Drives Island's cornerHintActive to collapse back
+  // to a bare circle even though state === 'done' still holds.
+  cornerDoneExpired?:  boolean
+  // True once the user has manually dismissed the corner "待回答" /
+  // "Question pending" banner by clicking the circle. App.tsx resets
+  // this on any state transition so a new question re-arms the banner.
+  cornerWaitingDismissed?: boolean
+  dragState?:          IslandDragState | null
+  showSettings?:       boolean
+  onToggleSettings?:   () => void
+  onPillPointerDown?:  (e: ReactMouseEvent) => void
+  onStripPointerEnter?: () => void
+  onOverlayPointerLeave?: () => void
   onToggleExpand:   () => void
   onToggleModelPicker: () => void
   onSelectModel:      (modelId: string) => void
@@ -237,10 +288,12 @@ interface IslandProps {
   onRemoveSession:  (id: number) => void
   onRenameSession:  (id: number, name: string) => void
   onSelectSession:  (id: number) => void
+  onOpenHarness:    (id: number) => void
   onOpenRemote:     (id: number) => void
   onCloseRemote:    () => void
   onActivateRemote: (id: number) => void
   onAction:         (action: ActionType) => void
+  onQuit:           () => void
   onDismissNotif:   () => void
   onHookDecision:   (hookKey: string, exitCode: number) => void
   onAllowAlways:    (hookKey: string, tool: string) => void
@@ -252,15 +305,27 @@ export function Island({
   reset5hAt, reset7dAt, activeSessionMode, activeApiUsage,
   expanded, showModelPicker, notification, sessions, activeSessionId,
   remotePopupSessionId, showAccessibilityWarning, apiProviders, apiBalances, apiUsage,
+  overlayMode = 'default', overlayPeek = false, cornerDoneExpired = false, cornerWaitingDismissed = false, dragState = null,
+  showSettings: showSettingsProp, onToggleSettings,
+  onPillPointerDown, onStripPointerEnter, onOverlayPointerLeave,
   onToggleExpand, onToggleModelPicker, onSelectModel, onSelectApiModel,
   codexModels, onSelectCodexModel,
-  onAddSession, onRemoveSession, onRenameSession, onSelectSession,
-  onOpenRemote, onCloseRemote, onActivateRemote, onAction,
+  onAddSession, onRemoveSession, onRenameSession, onSelectSession, onOpenHarness,
+  onOpenRemote, onCloseRemote, onActivateRemote, onAction, onQuit,
   onDismissNotif, onHookDecision, onAllowAlways, onReplyAndAllow,
 }: IslandProps): JSX.Element {
   const t               = useLang()
   const { lang, setLang } = useLangContext()
-  const [showSettings, setShowSettings] = useState(false)
+  // Settings can be controlled by the parent (App.tsx) so non-default overlay
+  // modes can size the window to fit the tall settings panel. We fall back
+  // to a local-only flag if the parent didn't wire it up — preserves the
+  // backwards-compat path for tests + earlier component consumers.
+  const [showSettingsLocal, setShowSettingsLocal] = useState(false)
+  const showSettings = showSettingsProp ?? showSettingsLocal
+  const toggleSettings = (): void => {
+    if (onToggleSettings) onToggleSettings()
+    else                  setShowSettingsLocal(s => !s)
+  }
   const [collapsedGroups, setCollapsedGroups] = useState<{ anthropic: boolean; codex: boolean }>({
     anthropic: false,
     codex:     false,
@@ -273,48 +338,15 @@ export function Island({
   const [hoverHint, setHoverHint] = useState<string | null>(null)
 
   // Settings should default to closed every time the island re-opens —
-  // collapsing implicitly dismisses the settings panel.
+  // collapsing implicitly dismisses the settings panel. Local fallback only
+  // (when App.tsx is providing showSettings, it owns this lifecycle).
   useEffect(() => {
-    if (!expanded) setShowSettings(false)
-  }, [expanded])
-
-  // Stage the BrowserWindow height so the settings panel never clips off
-  // the bottom of the screen. Remote popup height is owned by App.tsx; while
-  // that popup is open, avoid overwriting its taller window height.
-  //
-  // Notification popups (especially "Claude is asking" with long questions or
-  // many options) also need vertical room. The popup CSS caps itself at a
-  // viewport-relative max-height and scrolls inside — this effect just makes
-  // sure the BrowserWindow viewport is tall enough for that cap to mean
-  // anything. The popup must also be reachable when the pill is collapsed,
-  // since Claude can prompt while the user isn't actively looking at CCC.
-  useEffect(() => {
-    if (remotePopupSessionId !== null) return
-
-    // How much vertical room the active notification needs (rough upper
-    // bound — CSS will trim larger content with inner scroll).
-    let notifBudget = 0
-    if (notification) {
-      if      (notification.type === 'permission') notifBudget = 520
-      else if (notification.type === 'message')    notifBudget = 90
-      else if (notification.type === 'done')       notifBudget = 70
-    }
-
-    if (!expanded && notifBudget === 0) {
-      window.ccc?.setMainHeight(null)
-      return
-    }
-
-    // When the island is collapsed but a notification is showing, the only
-    // contribution to height is the pill itself (~60 incl. shadow) plus the
-    // popup budget. When expanded, start from the 520 expanded baseline.
-    let h = expanded ? 520 : 60
-    if (showModelPicker) h += 70
-    if (showSettings)    h = Math.max(h, 840)
-    if (notifBudget > 0) h += notifBudget
-
-    window.ccc?.setMainHeight(h)
-  }, [expanded, showSettings, showModelPicker, remotePopupSessionId, notification])
+    if (!expanded && showSettingsProp === undefined) setShowSettingsLocal(false)
+  }, [expanded, showSettingsProp])
+  // Window-height management lives in App.tsx now (single source so overlay
+  // modes can size the strip / circle without fighting this effect). The
+  // previous per-component setMainHeight call was removed when the overlay
+  // state machine landed; see App.tsx's targetBounds useMemo.
 
   const hasSession = sessions.length > 0
   const remoteSession = remotePopupSessionId !== null
@@ -341,21 +373,77 @@ export function Island({
     onToggleModelPicker()
   }
 
+  // ── Overlay-mode render derivations ──
+  // Strip renders whenever we're in top-hidden mode. CSS (.island-wrapper--peek)
+  // toggles whether the strip is visually shown (peek=false) or the pill is
+  // shown (peek=true) — the BrowserWindow no longer resizes between the two
+  // states, so there's nothing to flicker.
+  const showStrip = overlayMode === 'top-hidden' && !dragState
+  // Corner "collapsed" = circle, optionally with a text-banner. Expanded
+  // anchors the panel at the corner but uses the same render path as
+  // default mode so settings / sessions / etc. still work.
+  const cornerCollapsed = overlayMode === 'corner-shrunk' && !expanded && !dragState
+  // Banner gating:
+  //   - waiting: shows until the user clicks-to-dismiss (cornerWaitingDismissed
+  //     is flipped by App.tsx's onToggleExpand intercept) OR state changes.
+  //     App resets the flag on every state transition so a brand-new question
+  //     re-arms the banner.
+  //   - done:    shows until the App-level 3s timer flips cornerDoneExpired.
+  //   - message: shows for the lifetime of the (background) message notif.
+  //     'done' notifications are intentionally NOT a trigger — the done
+  //     state already covers that and we don't want the popup-state +
+  //     timer to fight each other.
+  const cornerHintActive = cornerCollapsed
+    && (((state === 'waiting' && !cornerWaitingDismissed))
+        || (state === 'done' && !cornerDoneExpired)
+        || (notification !== null && notification.type === 'message'))
+  const cornerHintText =
+    notification?.type === 'message' && notification.message ? notification.message :
+    state === 'waiting' ? t.overlayCornerQuestion :
+    state === 'done'    ? t.overlayCornerDone :
+    ''
+
+  // Inline position while dragging — pill's *top-left corner* is at
+  // (pointerX, pointerY). App.tsx already subtracted the grab-offset so the
+  // point the user originally grabbed stays under the cursor. No transform
+  // here — see .island--dragging in global.css for the lifted scale.
+  const islandStyle: CSSProperties | undefined = dragState ? {
+    position: 'fixed',
+    left:     dragState.pointerX,
+    top:      dragState.pointerY,
+  } : undefined
+
   return (
     <>
+      {showStrip && (
+        <div
+          className="top-strip"
+          onMouseEnter={onStripPointerEnter}
+          onMouseLeave={onOverlayPointerLeave}
+          aria-label="CCC overlay (auto-hidden)"
+        />
+      )}
       <div
         className={[
           'island',
           expanded ? 'island-expanded' : '',
           showModelPicker && !expanded ? 'island--with-picker' : '',
+          cornerCollapsed ? 'island--corner' : '',
+          cornerHintActive ? 'island--corner-hint' : '',
+          dragState ? 'island--dragging' : '',
         ].filter(Boolean).join(' ')}
+        style={islandStyle}
+        onMouseDown={onPillPointerDown}
+        onMouseLeave={onOverlayPointerLeave}
         onClick={() => { if (showModelPicker) onToggleModelPicker(); else onToggleExpand() }}
       >
         <div className="island-pill">
           <StateIcon state={state} />
 
           <div className="pill-center">
-            {hasSession ? (
+            {cornerHintActive ? (
+              <div className="corner-hint-text" aria-live="polite">{cornerHintText}</div>
+            ) : hasSession ? (
               <button
                 className="model-name-btn"
                 onClick={e => { e.stopPropagation(); onToggleModelPicker() }}
@@ -515,6 +603,7 @@ export function Island({
                   onSelect={() => onSelectSession(s.id)}
                   onRemove={() => onRemoveSession(s.id)}
                   onRename={name => onRenameSession(s.id, name)}
+                  onOpenHarness={HARNESS_BUTTON_VISIBLE ? () => onOpenHarness(s.id) : undefined}
                   onOpenRemote={() => onOpenRemote(s.id)}
                   onHoverHint={setHoverHint}
                 />
@@ -582,7 +671,7 @@ export function Island({
             <div className="action-row">
               <button
                 className={`action-btn${showSettings ? ' active' : ''}`}
-                onClick={() => setShowSettings(s => !s)}
+                onClick={toggleSettings}
                 aria-label="Settings"
               >
                 <svg width="9" height="9" viewBox="0 0 16 16" fill="none">
@@ -597,6 +686,17 @@ export function Island({
                   <rect x="1.5" y="1.5" width="6" height="6" rx="1" fill="currentColor" opacity="0.85" />
                 </svg>
                 {t.stopAll}
+              </button>
+              <button
+                className="action-btn danger-strong"
+                onClick={() => { if (showSettings) toggleSettings(); onQuit() }}
+                aria-label={t.quitApp}
+              >
+                <svg width="9" height="9" viewBox="0 0 10 10" fill="none">
+                  <path d="M5 1.5 V5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+                  <path d="M2.4 3.2 A3.2 3.2 0 1 0 7.6 3.2" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" fill="none" />
+                </svg>
+                {t.quitApp}
               </button>
             </div>
 
@@ -637,7 +737,51 @@ export function Island({
         )}
       </div>
 
-      {notification && (
+      {/* Snap-zone overlays — only painted during a drag. Window is sized
+          to the work area while dragging, so position:fixed coords here are
+          window-local (= screen coords when wa.x/y are 0; close enough for
+          visual guidance — hit-test in App.tsx uses real screen coords).
+          Three discrete targets: corner (top-left circle), hide (top-center
+          thin band), default (top-center pill below the hide band). The
+          `is-active` modifier brightens the target when hovered. */}
+      {dragState && (
+        <>
+          <div
+            className={`snap-zone snap-zone--corner${dragState.hoverZone === 'corner' ? ' is-active' : ''}`}
+            aria-hidden="true"
+          >
+            <span className="snap-zone__label">{t.overlayDropCorner}</span>
+          </div>
+          <div
+            className={`snap-zone snap-zone--hide${dragState.hoverZone === 'top' ? ' is-active' : ''}`}
+            aria-hidden="true"
+          >
+            <span className="snap-zone__label">{t.overlayDropHide}</span>
+          </div>
+          <div
+            className={`snap-zone snap-zone--default${dragState.hoverZone === 'default' ? ' is-active' : ''}`}
+            aria-hidden="true"
+          >
+            <span className="snap-zone__label">{t.overlayDropDefault}</span>
+          </div>
+        </>
+      )}
+
+      {/* Per-mode popup suppression rules — see shouldSuppressNotifPopup.
+          Informational popups (done, message) hide in non-default modes;
+          actionable popups (permission) ALWAYS show so the user can
+          respond from any mode. ADDITIONALLY: in corner-shrunk mode the
+          user can "我知道了"-dismiss the permission popup by clicking the
+          circle (cornerWaitingDismissed flips true) — popup + banner
+          both collapse and stay collapsed until the next state
+          transition re-arms them. The Yes/No/Always buttons remain
+          actionable in the popup as long as it's visible; dismissing
+          only hides the popup without answering, so Claude is still
+          waiting (the user can still answer in the terminal). */}
+      {notification
+        && !shouldSuppressNotifPopup(overlayMode, notification.type)
+        && !(overlayMode === 'corner-shrunk' && cornerWaitingDismissed)
+        && (
         <NotificationPopup
           notification={notification}
           onDismiss={onDismissNotif}

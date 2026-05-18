@@ -16,6 +16,7 @@ const SESSION: Session = {
   reset7dAt:     0,
   state:         'idle',
   notification:  null,
+  pendingPermissions: [],
   lastActivityAt: 0,
   mode:           'anthropic',
 }
@@ -67,6 +68,27 @@ class SessionRowTests {
         })
       })
 
+      describe('harness gear button', () => {
+        it('renders the gear when onOpenHarness is provided', () => {
+          render(<SessionRow session={SESSION} active={false} onSelect={vi.fn()} onRemove={vi.fn()} onRename={vi.fn()} onOpenHarness={vi.fn()} />)
+          expect(screen.getByLabelText('Open harness wizard for my-session')).toBeDefined()
+        })
+
+        it('does NOT render the gear when onOpenHarness is omitted', () => {
+          render(<SessionRow session={SESSION} active={false} onSelect={vi.fn()} onRemove={vi.fn()} onRename={vi.fn()} />)
+          expect(screen.queryByLabelText(/Open harness wizard/)).toBeNull()
+        })
+
+        it('calls onOpenHarness on click and does not call onSelect', () => {
+          const onOpenHarness = vi.fn()
+          const onSelect      = vi.fn()
+          render(<SessionRow session={SESSION} active={false} onSelect={onSelect} onRemove={vi.fn()} onRename={vi.fn()} onOpenHarness={onOpenHarness} />)
+          fireEvent.click(screen.getByLabelText('Open harness wizard for my-session'))
+          expect(onOpenHarness).toHaveBeenCalledOnce()
+          expect(onSelect).not.toHaveBeenCalled()
+        })
+      })
+
       describe('remote control button', () => {
         it('renders the remote button when onOpenRemote is provided', () => {
           render(<SessionRow session={SESSION} active={false} onSelect={vi.fn()} onRemove={vi.fn()} onRename={vi.fn()} onOpenRemote={vi.fn()} />)
@@ -87,6 +109,17 @@ class SessionRowTests {
           expect(onSelect).not.toHaveBeenCalled()
         })
 
+        it('renders the remote button to the LEFT of the harness button', () => {
+          const { container } = render(
+            <SessionRow session={SESSION} active={false} onSelect={vi.fn()} onRemove={vi.fn()} onRename={vi.fn()}
+              onOpenRemote={vi.fn()} onOpenHarness={vi.fn()} />
+          )
+          const buttons = Array.from(container.querySelectorAll('button'))
+          const remoteIdx  = buttons.findIndex(b => b.classList.contains('session-remote'))
+          const harnessIdx = buttons.findIndex(b => b.classList.contains('session-harness'))
+          expect(remoteIdx).toBeGreaterThanOrEqual(0)
+          expect(harnessIdx).toBeGreaterThan(remoteIdx)
+        })
       })
 
       describe('API mode stats (Chunk E)', () => {

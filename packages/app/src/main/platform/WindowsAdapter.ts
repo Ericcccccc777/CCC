@@ -331,6 +331,14 @@ Remove-Item '${safePath}' -ErrorAction SilentlyContinue
         `$b=(@{sessionId=${sessionId};event='stop'}|ConvertTo-Json -Compress);` +
         `try{Invoke-RestMethod -Uri '${url}' -Method POST -Body $b ` +
         `-ContentType 'application/json' -TimeoutSec 3|Out-Null}catch{} # ccc-hook"`,
+      // Claude Code does NOT treat exit code alone as a permission
+      // decision in current versions — it requires an explicit
+      // hookSpecificOutput.permissionDecision JSON on stdout. Exit 0
+      // alone reads as "no objection" (Claude prompts the user in the
+      // terminal) and exit 1 reads as "hook error" (Claude ignores the
+      // user's Deny click and runs the tool anyway). Always exit 0 and
+      // put the decision in stdout so the popup buttons actually gate.
+      // See DECISION_LOG 2026-05-17-5. Parallels MacOSAdapter HOOK_SCRIPT_BODY.
       PreToolUse:
         `powershell.exe -NonInteractive -ExecutionPolicy Bypass -Command ` +
         `"$stdin=try{[System.Console]::In.ReadToEnd()}catch{'{}'}; ` +
@@ -340,7 +348,10 @@ Remove-Item '${safePath}' -ErrorAction SilentlyContinue
         `$code=0; ` +
         `try{$r=Invoke-RestMethod -Uri '${url}' -Method POST -Body $b ` +
         `-ContentType 'application/json' -TimeoutSec 60; $code=[int]$r.exitCode}catch{}; ` +
-        `exit $code # ccc-hook"`,
+        `$decision=if($code -eq 0){'allow'}else{'deny'}; ` +
+        `$out=(@{hookSpecificOutput=@{hookEventName='PreToolUse';permissionDecision=$decision}}|ConvertTo-Json -Compress); ` +
+        `[Console]::Out.Write($out); ` +
+        `exit 0 # ccc-hook"`,
       Notification:
         `powershell.exe -NonInteractive -ExecutionPolicy Bypass -Command ` +
         `"$stdin=try{[System.Console]::In.ReadToEnd()}catch{'{}'}; ` +

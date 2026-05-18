@@ -9,11 +9,18 @@ import type {
   SessionRestored,
 } from '../../shared/session-state'
 import type { PlatformCapabilities } from '../../shared/platform'
+import type { HarnessConfig } from './harness-types'
 import type {
   ApiProviderConfig, ApiProviderId, ApiProviderListEntry, ApiTestResult,
 } from '../../shared/api-provider'
 import type { ApiBalanceSnapshot, ApiUsageSnapshot } from '../../shared/api-usage'
 import type { CodexReasoningEffort } from '../../shared/codex-cli'
+
+export interface HarnessGenerateResult {
+  path:          string
+  backedUpFrom?: string
+  appendedTo?:   string
+}
 
 export type {
   SessionLifecycleState,
@@ -23,6 +30,13 @@ export type {
 }
 
 export type AppState = SessionLifecycleState
+
+// Where the pill currently lives on screen. `default` = the historical
+// top-center 400×520 window. `top-hidden` = auto-hide strip at top center
+// that peeks out on hover or notification. `corner-shrunk` = circle at the
+// top-left corner. Drag mode (entered via long-press on the pill body) is
+// transient and not persisted — restart always returns to `default`.
+export type OverlayMode = 'default' | 'top-hidden' | 'corner-shrunk'
 
 export interface SessionNotification {
   type:       'done' | 'permission' | 'message'
@@ -47,6 +61,15 @@ export interface Session {
   reset7dAt:            number
   state:                SessionLifecycleState
   notification:         SessionNotification | null
+  // Queue of unanswered parallel permission requests. When Claude makes
+  // parallel tool calls, multiple PreToolUse hooks fire ~simultaneously;
+  // each becomes its own SESSION_STATE_CHANGED event. Without this queue
+  // the second arrival overwrites the first in `notification` and the
+  // user only sees the latest popup — the earlier hook silently auto-
+  // allows via its server-side timeout. Renderer pushes incoming
+  // permission updates here while another is showing; dismissing /
+  // answering the current one pops the next from the queue.
+  pendingPermissions:   ToolPermission[]
   lastActivityAt:       number
   // 'anthropic' = stock Claude Cloud (default). 'api' = third-party
   // Anthropic-compatible endpoint via env-var injection (DeepSeek in V1).
@@ -96,6 +119,15 @@ export interface CccBridge {
   focusSession:           (sessionId: number) => void
   onSessionRestored:      (cb: (data: SessionRestored) => void) => () => void
   setMainHeight:          (height: number | null) => void
+  setOverlayBounds:       (bounds: { x: number; y: number; width: number; height: number }, opts?: { animate?: boolean }) => void
+  getWorkArea:            () => Promise<{ x: number; y: number; width: number; height: number }>
+  // Harness wizard
+  openHarnessWindow:      (workspace: string) => void
+  closeHarnessWindow:     () => void
+  harnessCheck:           (workspace: string) => Promise<{ hasConfig: boolean; hasClaudeMd: boolean }>
+  harnessLoad:            (workspace: string) => Promise<HarnessConfig | null>
+  harnessSave:            (workspace: string, config: HarnessConfig) => Promise<void>
+  harnessGenerate:        (workspace: string, config: HarnessConfig) => Promise<HarnessGenerateResult>
   // Remote mirror
   getLocalMirrorUrl:      (sessionId: number) => Promise<string>
   // macOS: open System Settings → Accessibility
@@ -122,6 +154,9 @@ export interface CccBridge {
   codexCliLaunch:  (workspace: string, modelId: string) => Promise<{ ok: true; sessionId: number } | { ok: false; error: string }>
   codexCliSelectModel: (sessionId: number, modelMenuIndex: number, effort: CodexReasoningEffort) => void
   listKnownSessions: () => Promise<readonly SessionRestored[]>
+  // App lifecycle — Settings → Quit. Fire-and-forget; main kills all
+  // sessions + stops servers + app.quit()s.
+  quitApp:           () => void
 }
 
 export type { ToolPermission }

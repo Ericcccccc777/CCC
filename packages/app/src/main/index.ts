@@ -5,9 +5,14 @@ import { writeFileSync, unlinkSync, readFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { IPC } from '../shared/ipc-channels'
 import { HookServer } from './HookServer'
+import { CodexSessionWatcher } from './CodexSessionWatcher'
 import { MirrorServer } from './MirrorServer'
 import { ClaudeSettingsManager } from './ClaudeSettingsManager'
 import { SessionPersistence, PersistedSession } from './SessionPersistence'
+import {
+  checkWorkspace, loadConfig, saveConfig, generate as generateHarness,
+  type HarnessConfig,
+} from './HarnessManager'
 import type { PlatformAdapter } from './platform/PlatformAdapter'
 import { createPlatformAdapter } from './platform'
 import { STATUSLINE_RELAY_JS } from './platform/shared'
@@ -64,6 +69,7 @@ class SessionManager {
   private onApiSwitch: (sessionId: number, info: { providerId: ApiProviderId; modelId: string }) => void
   private port:        number
   private hooks:       HookServer
+  private codexWatcher: CodexSessionWatcher
   private settings:    ClaudeSettingsManager
   private adapter:     PlatformAdapter
   private apiProviders: ApiProviderManager
@@ -86,6 +92,7 @@ class SessionManager {
     onApiSwitch:  (sessionId: number, info: { providerId: ApiProviderId; modelId: string }) => void,
     port:         number,
     hooks:        HookServer,
+    codexWatcher: CodexSessionWatcher,
     adapter:      PlatformAdapter,
     apiProviders: ApiProviderManager,
     registry:     SessionPersistence,
@@ -94,6 +101,7 @@ class SessionManager {
     this.onApiSwitch  = onApiSwitch
     this.port         = port
     this.hooks        = hooks
+    this.codexWatcher = codexWatcher
     this.settings     = new ClaudeSettingsManager()
     this.adapter      = adapter
     this.apiProviders = apiProviders
@@ -281,6 +289,48 @@ class SessionManager {
       workspace,
       name:             basename(workspace),
       modelId,
+      pidFile:          result.pidFile,
+      statuslineScript,
+      cleanupPaths:     result.cleanupPaths,
+      mode:             'anthropic',
+      origin:           'ccc-managed',
+      capability:       'full',
+      startedAt:        Date.now(),
+    }
+    this.sessions.set(id, entry)
+    this.bindClose(entry, id)
+    this.flushRegistrySoon()
+
+    return id
+  }
+
+  // Non-interactive Claude run for harness generation: exits when claude
+  // finishes. No console keystroke injection. The adapter writes whatever
+  // platform-specific glue it needs and reports paths via cleanupPaths.
+  launchHeadless(workspace: string, prompt: string): number {
+    const id = this.nextId++
+    const p  = this.port
+
+    const statuslineScript = join(this.tmp, `ccc-statusline-${id}.js`)
+    writeFileSync(statuslineScript, STATUSLINE_RELAY_JS, 'utf8')
+
+    const statuslineCmd = this.adapter.buildStatusLineCommand(statuslineScript)
+    const hookCmds      = this.adapter.buildHookCommands(id, p)
+
+    try { this.settings.inject(workspace, hookCmds, statuslineCmd) } catch { /* non-fatal */ }
+
+    const result = this.adapter.launchHeadless({
+      workspace, prompt,
+      sessionId:            id,
+      port:                 p,
+      statuslineScriptPath: statuslineScript,
+    })
+
+    const entry: SessionEntry = {
+      proc:             result.proc,
+      workspace,
+      name:             basename(workspace),
+      modelId:          '',
       pidFile:          result.pidFile,
       statuslineScript,
       cleanupPaths:     result.cleanupPaths,
@@ -543,6 +593,7 @@ class SessionManager {
     }
     this.sessions.set(id, entry)
     this.bindClose(entry, id)
+    this.codexWatcher.start(id, workspace)
     this.flushRegistrySoon()
 
     return { ok: true, sessionId: id }
@@ -675,6 +726,7 @@ class SessionManager {
 
   private cleanup(entry: SessionEntry, sessionId: number): void {
     this.hooks.stopTranscript(sessionId)
+    this.codexWatcher.stop(sessionId)
     // Skip restore if another session is still using this workspace —
     // prevents the late child.on('close') from wiping out a newer session's hooks.
     const workspaceStillActive = [...this.sessions.values()]
@@ -706,6 +758,7 @@ class IpcHandlers {
   private apiUsage: ApiUsageManager | null = null
   private claudeCliManager: ClaudeCliManager
   private codexManager: CodexManager
+  private codexWatcher: CodexSessionWatcher
   private registry: SessionPersistence
 
   constructor(hooks: HookServer, adapter: PlatformAdapter, registry: SessionPersistence) {
@@ -715,6 +768,7 @@ class IpcHandlers {
     this.apiProviders = new ApiProviderManager(app.getPath('userData'), new ElectronCryptoVault())
     this.claudeCliManager = new ClaudeCliManager()
     this.codexManager = new CodexManager()
+    this.codexWatcher = new CodexSessionWatcher()
   }
 
   persistSessions(): PersistedSession[] {
@@ -757,6 +811,11 @@ class IpcHandlers {
 
     this.manager = new SessionManager(
       (sessionId) => {
+        if (this.hooks.isHarnessSession(sessionId)) {
+          // Harness session closed → notify renderer that generation is complete
+          this.hooks.unregisterHarnessSession(sessionId)
+          win.webContents.send(IPC.HARNESS_COMPLETE, { sessionId })
+        }
         // Drop API-mode tracking last so any final transcript-line broadcasts
         // race-free behind the renderer's SESSION_CLOSED handling.
         this.apiUsage?.unregisterSession(sessionId)
@@ -776,11 +835,13 @@ class IpcHandlers {
       },
       this.hooks.serverPort,
       this.hooks,
+      this.codexWatcher,
       this.adapter,
       this.apiProviders,
       this.registry,
     )
     this.hooks.attachWindow(win)
+    this.codexWatcher.attachWindow(win)
 
     ipcMain.on(IPC.SET_IGNORE_MOUSE, (_e, ignore: boolean) => {
       win.setIgnoreMouseEvents(ignore, { forward: true })
@@ -832,6 +893,74 @@ class IpcHandlers {
         : Math.max(WIN_HEIGHT, Math.min(height, sh - 20))
       const [w] = win.getSize()
       win.setSize(w, target)
+    })
+
+    // Overlay-mode bounds: bypasses MAIN_SET_HEIGHT's 520 min-clamp so the
+    // strip / circle / drag-mode fullscreen all work. Sanity-clamps to the
+    // primary display so a renderer bug can't push the window off-screen.
+    ipcMain.on(IPC.OVERLAY_SET_BOUNDS, (
+      _e,
+      bounds: { x: number; y: number; width: number; height: number },
+      opts?: { animate?: boolean },
+    ) => {
+      const wa = screen.getPrimaryDisplay().workArea
+      const width  = Math.max(4, Math.min(Math.floor(bounds.width),  wa.width))
+      const height = Math.max(4, Math.min(Math.floor(bounds.height), wa.height))
+      const x = Math.max(wa.x, Math.min(Math.floor(bounds.x), wa.x + wa.width  - width))
+      const y = Math.max(wa.y, Math.min(Math.floor(bounds.y), wa.y + wa.height - height))
+      win.setBounds({ x, y, width, height }, opts?.animate === true)
+    })
+
+    ipcMain.handle(IPC.OVERLAY_GET_WORK_AREA, () => {
+      return screen.getPrimaryDisplay().workArea
+    })
+
+    // ── Harness IPC ──
+    ipcMain.handle(IPC.HARNESS_CHECK, (_e, workspace: string) => {
+      return checkWorkspace(workspace)
+    })
+
+    ipcMain.handle(IPC.HARNESS_LOAD, (_e, workspace: string) => {
+      return loadConfig(workspace)
+    })
+
+    ipcMain.handle(IPC.HARNESS_SAVE, (_e, workspace: string, config: HarnessConfig) => {
+      saveConfig(workspace, config)
+    })
+
+    // V2.1: synchronous template render + write. No spawn, no Q&A.
+    ipcMain.handle(IPC.HARNESS_GENERATE, (_e, workspace: string, config: HarnessConfig) => {
+      return generateHarness(workspace, config)
+    })
+
+    // Window resize for harness wizard
+    ipcMain.on(IPC.HARNESS_EXPAND_WINDOW, () => {
+      if (!win) return
+      const { width: sw, height: sh } = screen.getPrimaryDisplay().workAreaSize
+      const W = 620, H = Math.min(780, sh - 40)
+      win.setResizable(true)
+      win.setAlwaysOnTop(false)
+      win.setSize(W, H)
+      win.setPosition(Math.floor((sw - W) / 2), Math.floor((sh - H) / 2))
+    })
+
+    ipcMain.on(IPC.HARNESS_COLLAPSE_WINDOW, () => {
+      if (!win) return
+      const { width: sw } = screen.getPrimaryDisplay().workAreaSize
+      win.setResizable(false)
+      win.setAlwaysOnTop(true, 'screen-saver')
+      win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
+      win.setSize(WIN_WIDTH, WIN_HEIGHT)
+      win.setPosition(Math.floor((sw - WIN_WIDTH) / 2), 0)
+    })
+
+    ipcMain.on(IPC.HARNESS_OPEN_WINDOW, (_e, workspace: string) => {
+      this.openHarnessWindow(workspace)
+    })
+
+    ipcMain.on(IPC.HARNESS_CLOSE_WINDOW, (e) => {
+      const sender = BrowserWindow.fromWebContents(e.sender)
+      if (sender && sender !== win) sender.close()
     })
 
     // ── Remote mirror ──
@@ -927,6 +1056,51 @@ class IpcHandlers {
       if (!this.manager) return { ok: false as const, error: 'manager-not-ready' }
       return this.manager.launchCodex(workspace, modelId)
     })
+  }
+
+  private harnessWindows = new Map<string, BrowserWindow>()
+
+  private openHarnessWindow(workspace: string): void {
+    const existing = this.harnessWindows.get(workspace)
+    if (existing && !existing.isDestroyed()) { existing.focus(); return }
+
+    const { width: sw, height: sh } = screen.getPrimaryDisplay().workAreaSize
+    const W = 760
+    const H = Math.min(820, sh - 60)
+
+    const win = new BrowserWindow({
+      x:               Math.floor((sw - W) / 2),
+      y:               Math.floor((sh - H) / 2),
+      width:           W,
+      height:          H,
+      frame:           false,
+      transparent:     false,
+      alwaysOnTop:     false,
+      resizable:       true,
+      minWidth:        620,
+      minHeight:       560,
+      skipTaskbar:     false,
+      hasShadow:       true,
+      backgroundColor: '#0a0a0a',
+      title:           'CCC — Harness Wizard',
+      webPreferences: {
+        preload:          join(__dirname, '../preload/index.js'),
+        nodeIntegration:  false,
+        contextIsolation: true,
+        sandbox:          false,
+      },
+    })
+
+    this.harnessWindows.set(workspace, win)
+    win.on('closed', () => { this.harnessWindows.delete(workspace) })
+
+    const params = `?view=harness&workspace=${encodeURIComponent(workspace)}`
+    const isDev = !app.isPackaged
+    if (isDev && process.env['ELECTRON_RENDERER_URL']) {
+      win.loadURL(process.env['ELECTRON_RENDERER_URL'] + params)
+    } else {
+      win.loadFile(join(__dirname, '../renderer/index.html'), { search: params })
+    }
   }
 
   cleanup(): void {
@@ -1026,7 +1200,15 @@ class AppWindow {
       }, 1000)
     }
 
-    this.win.on('closed', () => { this.handlers?.cleanup() })
+    this.win.on('closed', () => {
+      this.handlers?.cleanup()
+      this.mirrorSrv.stop()
+    })
+
+    // Renderer-initiated full quit (Settings → Quit button). app.quit()
+    // closes the BrowserWindow, which fires win.on('closed') above and
+    // tears down sessions + servers in one path.
+    ipcMain.on(IPC.QUIT_APP, () => { app.quit() })
   }
 }
 

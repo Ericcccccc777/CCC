@@ -62,11 +62,24 @@ const HOOK_SCRIPT_BODY =
     'else p={sessionId:sid,event:"notification",message:d.message||""};' +
     'const b=JSON.stringify(p);' +
     'const t=ev==="pretooluse"?60000:3000;' +
+    // For PreToolUse, Claude Code does NOT treat the exit code alone as a
+    // permission decision in current versions — it requires an explicit
+    // hookSpecificOutput.permissionDecision JSON on stdout. Without that,
+    // exit 0 reads as "no objection" (Claude prompts the user in terminal
+    // anyway) and exit 1 reads as "hook error" (Claude proceeds with the
+    // tool, ignoring the user's Deny click). We always exit 0 and put the
+    // decision in stdout so the popup's Yes/No/Always buttons actually
+    // gate the tool. See DECISION_LOG 2026-05-17-5.
     'const req=http.request({hostname:"127.0.0.1",port:port,path:"/hook",method:"POST",' +
       'headers:{"Content-Type":"application/json","Content-Length":Buffer.byteLength(b)},timeout:t},r=>{' +
       'let s="";r.on("data",c=>s+=c);' +
       'r.on("end",()=>{' +
-        'if(ev==="pretooluse"){try{process.exit(JSON.parse(s).exitCode||0)}catch(e){process.exit(0)}}' +
+        'if(ev==="pretooluse"){' +
+          'let ec=0;try{ec=JSON.parse(s).exitCode||0}catch(e){}' +
+          'const dec=ec===0?"allow":"deny";' +
+          'const out=JSON.stringify({hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:dec}});' +
+          'process.stdout.write(out,()=>process.exit(0))' +
+        '}' +
         'else process.exit(0)' +
       '})' +
     '});' +
