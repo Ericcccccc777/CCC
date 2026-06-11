@@ -1150,6 +1150,13 @@ class AppWindow {
         nodeIntegration:  false,
         contextIsolation: true,
         sandbox:          false,
+        // The overlay is a realtime HUD. Chromium marks transparent
+        // always-on-top windows occluded on Windows after idle, which
+        // throttles renderer timers and then flushes them in a burst on
+        // the next click — racing the long-press / mouse-passthrough
+        // logic (a single click could strand the pill in drag mode).
+        // Never throttle this window.
+        backgroundThrottling: false,
       },
     })
 

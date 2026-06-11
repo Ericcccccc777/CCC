@@ -287,6 +287,10 @@ export function App(): JSX.Element {
   // the last-sent value and skips duplicates. `lastIgnoreMouseRef` lives at
   // the component scope so it survives re-renders.
   const lastIgnoreMouseRef = useRef<boolean | null>(null)
+  // True between a primary-button mousedown on the pill and its mouseup.
+  // Used to (a) block passthrough release mid-press and (b) sanity-check
+  // the long-press timer — see the lost-mouseup notes below.
+  const primaryPressActiveRef = useRef(false)
 
   const setIgnoreMouseDeduped = useCallback((ignore: boolean): void => {
     if (lastIgnoreMouseRef.current === ignore) return
@@ -295,6 +299,14 @@ export function App(): JSX.Element {
   }, [])
 
   const releaseMousePassthrough = useCallback((): void => {
+    // Never go click-through while the user is physically holding the pill
+    // or dragging it. Releasing mid-press makes the OS deliver the coming
+    // mouseup to the window underneath, so the renderer never sees it —
+    // the long-press timer then fires unopposed and a plain click "sticks"
+    // in drag mode. Seen on Windows after an idle period, where Chromium's
+    // occlusion throttling flushes stale timers (hover-leave fades, auto-
+    // rehide) right as the user clicks.
+    if (primaryPressActiveRef.current || dragStateRef.current) return
     setIgnoreMouseDeduped(true)
   }, [setIgnoreMouseDeduped])
 
@@ -624,10 +636,14 @@ export function App(): JSX.Element {
     const pillRect = pillEl?.getBoundingClientRect()
     const offsetX = pillRect ? startClientX - pillRect.left : 0
     const offsetY = pillRect ? startClientY - pillRect.top  : 0
+    primaryPressActiveRef.current = true
     longPressStartRef.current = { x: startClientX, y: startClientY }
     longPressTimerRef.current = window.setTimeout(() => {
       // Long-press fired — engage drag mode.
       longPressTimerRef.current = null
+      // Belt-and-braces: if the press has been released through any path
+      // that didn't clear this timer (lost mouseup, blur), never engage.
+      if (!primaryPressActiveRef.current) return
       const wa = workAreaRef.current
       if (!wa) return
       // Convert from old-window-local to screen coords using the window
@@ -645,10 +661,48 @@ export function App(): JSX.Element {
     }, LONG_PRESS_MS)
   }, [expanded, showModelPicker])
 
+  // Settle an engaged drag at the given window-local point. Shared by the
+  // normal mouseup path and the lost-mouseup self-heal in onMove below.
+  const settleDragAt = useCallback((clientX: number, clientY: number): void => {
+    const cur = dragStateRef.current
+    if (!cur) return
+    const wa = workAreaRef.current
+    const screenX = window.screenX + clientX
+    const screenY = window.screenY + clientY
+    const zone = wa ? classifyHoverZone(screenX, screenY, wa) : null
+    // Dropping outside every zone reverts to whichever mode the drag
+    // started from — never lose the prior mode by accident.
+    const nextMode: OverlayMode =
+      zone === 'top'     ? 'top-hidden'    :
+      zone === 'corner'  ? 'corner-shrunk' :
+      zone === 'default' ? 'default'       :
+      cur.fromMode
+    // Suppress the trailing click that follows mouseup so the pill doesn't
+    // immediately toggle expand after a drag.
+    justDraggedRef.current = true
+    window.setTimeout(() => { justDraggedRef.current = false }, 150)
+    setDragState(null)
+    setOverlayMode(nextMode)
+    // Entering a new mode resets peek — pill starts collapsed and any
+    // hover/notif logic re-opens it from scratch.
+    setOverlayPeek(false)
+  }, [])
+
   // Document-level move/up: track pointer for long-press cancellation +
   // drag tracking. Always mounted so the listeners are stable.
   useEffect(() => {
     const onMove = (e: MouseEvent): void => {
+      // Self-heal a lost mouseup: if the OS says the primary button is no
+      // longer down while a press or drag is still in flight, the mouseup
+      // was delivered elsewhere (focus change / passthrough flip — seen on
+      // Windows after idle). Treat this move as the missed mouseup so a
+      // plain click can never strand the pill in drag mode.
+      if ((e.buttons & 1) === 0 && (primaryPressActiveRef.current || dragStateRef.current)) {
+        primaryPressActiveRef.current = false
+        cancelLongPress()
+        settleDragAt(e.clientX, e.clientY)
+        return
+      }
       // Cancel pending long-press if the user moved before the timer fired
       // (treat that as a normal click-drag, not a long-press).
       const start = longPressStartRef.current
@@ -670,37 +724,32 @@ export function App(): JSX.Element {
       }
     }
     const onUp = (e: MouseEvent): void => {
+      // e.buttons on mouseup excludes the button just released, so this
+      // clears the press flag exactly when the primary button comes up.
+      if ((e.buttons & 1) === 0) primaryPressActiveRef.current = false
       cancelLongPress()
-      const cur = dragStateRef.current
-      if (!cur) return
-      const wa = workAreaRef.current
-      const screenX = window.screenX + e.clientX
-      const screenY = window.screenY + e.clientY
-      const zone = wa ? classifyHoverZone(screenX, screenY, wa) : null
-      // Dropping outside every zone reverts to whichever mode the drag
-      // started from — never lose the prior mode by accident.
-      const nextMode: OverlayMode =
-        zone === 'top'     ? 'top-hidden'    :
-        zone === 'corner'  ? 'corner-shrunk' :
-        zone === 'default' ? 'default'       :
-        cur.fromMode
-      // Suppress the trailing click that follows mouseup so the pill doesn't
-      // immediately toggle expand after a drag.
-      justDraggedRef.current = true
-      window.setTimeout(() => { justDraggedRef.current = false }, 150)
-      setDragState(null)
-      setOverlayMode(nextMode)
-      // Entering a new mode resets peek — pill starts collapsed and any
-      // hover/notif logic re-opens it from scratch.
-      setOverlayPeek(false)
+      settleDragAt(e.clientX, e.clientY)
+    }
+    // Focus loss / occlusion mid-press means the mouseup will be delivered
+    // elsewhere — a pending long-press must not engage drag afterwards.
+    const onFocusLost = (): void => {
+      primaryPressActiveRef.current = false
+      cancelLongPress()
+    }
+    const onVisibilityChange = (): void => {
+      if (document.visibilityState !== 'visible') onFocusLost()
     }
     document.addEventListener('mousemove', onMove)
     document.addEventListener('mouseup', onUp)
+    window.addEventListener('blur', onFocusLost)
+    document.addEventListener('visibilitychange', onVisibilityChange)
     return () => {
       document.removeEventListener('mousemove', onMove)
       document.removeEventListener('mouseup', onUp)
+      window.removeEventListener('blur', onFocusLost)
+      document.removeEventListener('visibilitychange', onVisibilityChange)
     }
-  }, [cancelLongPress])
+  }, [cancelLongPress, settleDragAt])
 
   // Auto-peek for top-hidden mode:
   //   - When a notification fires: peek out (pill + popup visible).

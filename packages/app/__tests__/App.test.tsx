@@ -109,6 +109,50 @@ class AppTests {
         expect(window.ccc.setIgnoreMouseEvents).toHaveBeenLastCalledWith(true)
       })
 
+      // Lost-mouseup self-heal — on Windows after an idle period the mouseup
+      // following a click on the pill can be delivered to the window under
+      // the overlay (passthrough flip / focus change), so the renderer never
+      // sees it and the long-press timer engages drag mode on a plain click.
+      describe('long-press lost-mouseup self-heal', () => {
+        it('does not engage drag when a move reports the button released before the timer fires', async () => {
+          render(<App />)
+          await waitFor(() => expect(window.ccc.codexCliDetect).toHaveBeenCalledWith())
+          const island = document.querySelector('.island')!
+
+          fireEvent.mouseDown(island, { button: 0, buttons: 1, clientX: 50, clientY: 10 })
+          // The missed mouseup: the next move says the primary button is up.
+          fireEvent.mouseMove(document, { buttons: 0, clientX: 51, clientY: 11 })
+          await act(async () => { await new Promise(r => setTimeout(r, 450)) })
+
+          expect(document.querySelector('.island-wrapper--dragging')).toBeNull()
+        })
+
+        it('exits drag mode on the first mouse move after a lost mouseup', async () => {
+          render(<App />)
+          await waitFor(() => expect(window.ccc.codexCliDetect).toHaveBeenCalledWith())
+          const island = document.querySelector('.island')!
+
+          fireEvent.mouseDown(island, { button: 0, buttons: 1, clientX: 50, clientY: 10 })
+          await act(async () => { await new Promise(r => setTimeout(r, 450)) })
+          expect(document.querySelector('.island-wrapper--dragging')).toBeTruthy()
+
+          fireEvent.mouseMove(document, { buttons: 0, clientX: 60, clientY: 20 })
+          expect(document.querySelector('.island-wrapper--dragging')).toBeNull()
+        })
+
+        it('cancels a pending long-press when the window blurs mid-press', async () => {
+          render(<App />)
+          await waitFor(() => expect(window.ccc.codexCliDetect).toHaveBeenCalledWith())
+          const island = document.querySelector('.island')!
+
+          fireEvent.mouseDown(island, { button: 0, buttons: 1, clientX: 50, clientY: 10 })
+          window.dispatchEvent(new Event('blur'))
+          await act(async () => { await new Promise(r => setTimeout(r, 450)) })
+
+          expect(document.querySelector('.island-wrapper--dragging')).toBeNull()
+        })
+      })
+
       it('keeps CCC clickable after switching sessions while the pointer stays inside', async () => {
         vi.mocked(window.ccc.codexCliDetect).mockResolvedValue({ installed: false, loggedIn: false, email: null, models: [] })
         vi.mocked(window.ccc.openFolderDialog)
