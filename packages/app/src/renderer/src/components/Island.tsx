@@ -15,16 +15,18 @@ import { CodexCliPanel } from './CodexCliPanel'
 import type { CodexModel } from '../../../shared/codex-cli'
 
 // Note on switchAlias: Claude Code's `/model <alias>` accepts aliases for
-// each picker entry. The Sonnet entry is currently labelled "Default
-// (recommended)" in the picker (with subtitle "Sonnet 4.6 · Best for
-// everyday tasks"); its alias is `default`, NOT `sonnet`. Sending
-// `/model sonnet` makes the CLI create a *custom* model named "sonnet"
-// instead of selecting the existing default — so it must be `default`.
-// Opus and Haiku are still distinct picker entries and keep their own
-// short aliases.
+// each picker entry. As of CLI 2.1.x the "Default (recommended)" picker
+// entry IS Opus 4.8 ("with 1M context · Best for everyday, complex
+// tasks"); its alias is `default`, NOT `opus`. Sending `/model opus`
+// makes the CLI create a *custom* model entry instead of selecting the
+// built-in default — so the Opus chip must send `default`. Sonnet, Fable
+// and Haiku are distinct picker entries with their own short aliases.
+// `name` must match the statusline display_name exactly (see
+// canonicalModelId) so the chip highlights when that model is active.
 export const MODELS_INFO: readonly ModelInfo[] = [
-  { id: 'claude-sonnet-4-6',         switchAlias: 'default', name: 'Sonnet 4.6', desc: 'Default · Recommended' },
-  { id: 'claude-opus-4-7',           switchAlias: 'opus',    name: 'Opus 4.7',   desc: 'Most capable' },
+  { id: 'claude-opus-4-8',           switchAlias: 'default', name: 'Opus 4.8',   desc: 'Default · 1M context' },
+  { id: 'claude-sonnet-4-6',         switchAlias: 'sonnet',  name: 'Sonnet 4.6', desc: 'Efficient · Routine tasks' },
+  { id: 'claude-fable-5',            switchAlias: 'fable',   name: 'Fable 5',    desc: 'Frontier · Hardest problems' },
   { id: 'claude-haiku-4-5-20251001', switchAlias: 'haiku',   name: 'Haiku 4.5',  desc: 'Lightweight · Economy' },
 ]
 

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
-import { Island, formatCountdown, shouldSuppressNotifPopup } from '@renderer/components/Island'
+import { Island, MODELS_INFO, formatCountdown, shouldSuppressNotifPopup } from '@renderer/components/Island'
 import type { Session, AppState, ActionType } from '@renderer/types'
 
 const DEFAULT_SESSION: Session = {
@@ -523,15 +523,36 @@ class IslandTests {
       describe('model picker', () => {
         it('shows model options when showModelPicker=true', () => {
           render(<Island {...IslandTests.makeProps({ showModelPicker: true })} />)
-          expect(screen.getByText('Opus 4.7')).toBeDefined()
+          expect(screen.getByText('Fable 5')).toBeDefined()
+          expect(screen.getByText('Opus 4.8')).toBeDefined()
           expect(screen.getByText('Haiku 4.5')).toBeDefined()
         })
 
         it('calls onSelectModel with model id', () => {
           const onSelectModel = vi.fn<[string], void>()
           render(<Island {...IslandTests.makeProps({ showModelPicker: true, onSelectModel })} />)
-          fireEvent.click(screen.getByText('Opus 4.7'))
-          expect(onSelectModel).toHaveBeenCalledWith('claude-opus-4-7')
+          fireEvent.click(screen.getByText('Opus 4.8'))
+          expect(onSelectModel).toHaveBeenCalledWith('claude-opus-4-8')
+        })
+
+        it('calls onSelectModel with the Fable 5 id', () => {
+          const onSelectModel = vi.fn<[string], void>()
+          render(<Island {...IslandTests.makeProps({ showModelPicker: true, onSelectModel })} />)
+          fireEvent.click(screen.getByText('Fable 5'))
+          expect(onSelectModel).toHaveBeenCalledWith('claude-fable-5')
+        })
+
+        // The CLI's "Default (recommended)" entry is Opus 4.8; its alias is
+        // `default` — sending `/model opus` creates a custom 5th entry in the
+        // CLI picker instead of selecting the built-in default. Lock the
+        // alias mapping so a regression is caught here, not in smoke tests.
+        it('maps chips to the CLI /model aliases', () => {
+          expect(MODELS_INFO.map(m => [m.id, m.switchAlias])).toEqual([
+            ['claude-opus-4-8',           'default'],
+            ['claude-sonnet-4-6',         'sonnet'],
+            ['claude-fable-5',            'fable'],
+            ['claude-haiku-4-5-20251001', 'haiku'],
+          ])
         })
 
         it('does NOT render the custom-API row when no providers configured', () => {

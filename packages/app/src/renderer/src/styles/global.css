@@ -678,6 +678,14 @@ body {
 .model-picker-strip--pill {
   padding: 10px;
   border-top: 1px solid rgba(255,255,255,0.06);
+  /* The collapsed island is shrink-to-fit (flex column, align-items:center),
+     so the strip's intrinsic max-content width — one row of chips with
+     nowrap name/desc text — would widen the whole island beyond the 340px
+     pill once a 4th model chip exists. width:0 + min-width:100% removes the
+     strip from intrinsic sizing while still rendering at the island's full
+     width; chips then share the pill width and ellipsize as designed. */
+  width: 0;
+  min-width: 100%;
 }
 
 .model-picker-strip--panel {
