@@ -29,7 +29,7 @@ Live model + context + usage at the top of your screen · drag-to-reposition · 
 
 **CLI Coding Cockpit** (CCC for short) is a desktop helper for developers who use **Claude Code CLI**, **Codex CLI**, or any third-party API provider as their daily coding companion. It puts a small always-on-top "pill" at the top-center of your screen that shows, in real time:
 
-- **Active model** (Sonnet / Opus / Haiku / DeepSeek / Codex)
+- **Active model** (Opus / Sonnet / Fable / Haiku / DeepSeek / Codex)
 - **Context window usage %**
 - **5-hour and 7-day rolling rate-limit usage**
 - **Live lifecycle state**: streaming · waiting · question pending · done
@@ -56,7 +56,7 @@ CCC is built for the **CLI-curious vibe-coder** — developers who want to use C
 | **Always-on-top pill** | Floating overlay at top-center of primary display; click-through except over CCC chrome |
 | **Drag-to-reposition** | Long-press the pill → drag to one of three snap zones: **top-left circle** (corner mode), **top-center thin strip** (auto-hide mode), or **top-center pill** (default position). Hover over the strip to peek; click the circle to expand |
 | **Live session state** | Streaming · waiting · question · done — driven by Claude Code's own hooks for Claude sessions and the rollout-JSONL watcher for Codex sessions |
-| **Model picker** | One-click switch between Sonnet 4.6 / Opus 4.7 / Haiku 4.5 — sends `/model <alias>` into the active session |
+| **Model picker** | One-click switch between Opus 4.8 (default, 1M context) / Sonnet 4.6 / Fable 5 / Haiku 4.5 — sends `/model <alias>` into the active session |
 | **Permission popups (actually gate the tool)** | Bash / Edit / Read / Write tool requests pop a tiny **Yes / Always / No** prompt. CCC's hook writes a `permissionDecision` JSON to stdout so Claude Code honors the user's choice — Deny actually denies, Allow runs the tool exactly once, **Always** remembers per-session. Parallel tool calls queue up and the user answers each one |
 | **AskUserQuestion UI** | Structured questions render with clickable option buttons; textarea reply when no options |
 | **Per-mode popup behavior** | In hide / corner modes, informational popups (done / message) auto-suppress to avoid pill takeover. Actionable popups (permission with Yes/No/Always) always render so the user can respond. Corner mode adds a click-to-dismiss "我知道了" affordance |
@@ -228,7 +228,7 @@ PRs welcome. Run `pnpm lint && pnpm test` green before opening a PR. The project
 
 **CLI Coding Cockpit**（简称 **CCC**）是一个为 **Claude Code CLI**、**Codex CLI** 以及任何第三方 API provider 用户设计的桌面辅助工具。它在你屏幕顶部中央常驻一个小"灵动岛"风格的悬浮条，实时显示：
 
-- **当前模型**（Sonnet / Opus / Haiku / DeepSeek / Codex）
+- **当前模型**（Opus / Sonnet / Fable / Haiku / DeepSeek / Codex）
 - **上下文窗口使用百分比**
 - **5 小时 / 7 天滚动用量**
 - **会话生命周期状态**：正在响应 · 等待输入 · 有问题 · 完成
@@ -255,7 +255,7 @@ CCC 面向**对 CLI vibe coding 还没完全熟练**的开发者——你想用 
 | **常驻顶部悬浮条** | 显示器顶部中央常驻 always-on-top；除 CCC 自身区域外鼠标穿透 |
 | **拖动换位置** | 长按悬浮条 → 拖到三个 snap 框之一：**左上圆形**（角落模式）、**顶部中间细条**（自动隐藏模式，鼠标移到屏幕顶部探出）、或**顶部中间胶囊**（默认位置）。点圆圈展开 |
 | **实时会话状态** | streaming · waiting · question · done —— Claude 会话挂 Claude Code 的 hooks，Codex 会话挂 rollout-JSONL 监听器 |
-| **模型切换器** | 一键在 Sonnet 4.6 / Opus 4.7 / Haiku 4.5 之间切换，自动给会话发送 `/model <alias>` |
+| **模型切换器** | 一键在 Opus 4.8（默认，1M 上下文）/ Sonnet 4.6 / Fable 5 / Haiku 4.5 之间切换，自动给会话发送 `/model <alias>` |
 | **权限弹窗（真正能拦截工具）** | Bash / Edit / Read / Write 等工具请求弹一个小 **Yes / Always / No** 框。CCC 的 hook 会向 stdout 写 `permissionDecision` JSON，Claude Code 会真正按用户选择执行——拒绝就是拒绝，允许就只跑这一次，**Always** 在本会话内记住。并行工具调用会排队，用户逐个回答 |
 | **AskUserQuestion 选项 UI** | 结构化问题显示成可点击按钮；无选项时显示文本输入框 |
 | **按模式区分的 popup 行为** | 隐藏 / 角落模式下，纯信息类 popup（done / message）自动隐藏不打扰；可操作的 popup（带 Yes/No/Always 的权限）任何模式都显示。角落模式增加点圆圈"我知道了"的 dismiss 行为 |
@@ -426,7 +426,7 @@ API 模式的会话会在悬浮条上实时显示 token 消耗和美元成本。
 
 **CLI Coding Cockpit** (줄여서 **CCC**)는 **Claude Code CLI**, **Codex CLI**, 또는 모든 서드파티 API 공급자를 데일리 코딩 도구로 사용하는 개발자를 위한 데스크톱 도우미입니다. 화면 상단 중앙에 항상 떠 있는 "Dynamic Island" 스타일의 작은 알약을 띄워 다음 정보를 실시간으로 보여줍니다:
 
-- **현재 모델** (Sonnet / Opus / Haiku / DeepSeek / Codex)
+- **현재 모델** (Opus / Sonnet / Fable / Haiku / DeepSeek / Codex)
 - **컨텍스트 윈도우 사용률 %**
 - **5시간 / 7일 롤링 사용량**
 - **세션 라이프사이클 상태**: 응답 중 · 입력 대기 · 질문 · 완료
@@ -453,7 +453,7 @@ CCC는 **CLI vibe coding 에 아직 완전히 익숙하지 않은** 개발자를
 | **항상 위에 떠 있는 알약** | 주 모니터 상단 중앙; CCC chrome 위에서만 클릭 캡처, 그 외는 클릭 통과 |
 | **드래그로 위치 이동** | 알약 길게 누르기 → 세 개의 스냅 존 중 하나로 드래그: **좌측 상단 원** (코너 모드), **상단 중앙 얇은 띠** (자동 숨김 모드, 화면 상단에 마우스 올리면 살짝 나타남), 또는 **상단 중앙 알약** (기본 위치). 원 클릭으로 확장 |
 | **실시간 세션 상태** | streaming · waiting · question · done — Claude 세션은 Claude Code hooks, Codex 세션은 rollout-JSONL 와처가 구동 |
-| **모델 선택기** | Sonnet 4.6 / Opus 4.7 / Haiku 4.5 사이 원클릭 전환; 세션에 `/model <alias>` 자동 전송 |
+| **모델 선택기** | Opus 4.8 (기본, 1M 컨텍스트) / Sonnet 4.6 / Fable 5 / Haiku 4.5 사이 원클릭 전환; 세션에 `/model <alias>` 자동 전송 |
 | **권한 팝업 (실제로 툴을 차단)** | Bash / Edit / Read / Write 툴 요청 시 작은 **Yes / Always / No** 프롬프트. CCC 의 hook 이 stdout 에 `permissionDecision` JSON 을 써서 Claude Code 가 사용자 선택을 진짜로 존중함 — Deny 는 진짜로 차단, Allow 는 정확히 한 번만 실행, **Always** 는 세션 내에서 기억. 병렬 툴 호출은 큐에 쌓여 사용자가 각각 응답 |
 | **AskUserQuestion UI** | 구조화된 질문은 클릭 가능한 옵션 버튼으로; 옵션이 없으면 텍스트 입력 |
 | **모드별 팝업 동작** | 숨김 / 코너 모드에서는 정보 전용 팝업 (done / message) 이 자동 숨김 처리. 작동 가능한 팝업 (Yes/No/Always 의 권한) 은 모든 모드에서 표시. 코너 모드는 클릭 dismiss "我知道了" 동작 추가 |
