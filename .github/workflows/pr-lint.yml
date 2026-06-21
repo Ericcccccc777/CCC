@@ -1,0 +1,36 @@
+name: PR Lint
+
+on:
+  pull_request_target:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  pull-requests: read
+
+jobs:
+  conventional-title:
+    name: Conventional Commits title
+    runs-on: ubuntu-latest
+    steps:
+      # Validates the PR *title* against the project's Conventional Commits
+      # convention (see README "Contributing"). Title is what lands on the
+      # squash-merge commit, so this keeps main's history consistent.
+      - name: Validate PR title
+        uses: amannn/action-semantic-pull-request@v5
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          types: |
+            feat
+            fix
+            refactor
+            test
+            ci
+            docs
+            chore
+          scopes: |
+            app
+            infra
+          # Scope is optional (e.g. `docs: …`), but when present it must be
+          # one of the listed scopes.
+          requireScope: false

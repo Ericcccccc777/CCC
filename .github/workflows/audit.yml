@@ -1,0 +1,36 @@
+name: Audit
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Weekly audit so advisories disclosed after a merge still get flagged.
+    - cron: '30 3 * * 1'
+
+permissions:
+  contents: read
+
+jobs:
+  pnpm-audit:
+    name: pnpm audit
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: pnpm
+
+      # Reads the committed lockfile only — no install / build scripts run.
+      - name: Audit dependencies (fail on high/critical)
+        run: pnpm audit --audit-level high
