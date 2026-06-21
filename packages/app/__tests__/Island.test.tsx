@@ -144,9 +144,9 @@ class IslandTests {
           expect(screen.getByText('test-session')).toBeDefined()
         })
 
-        it('hides the harness button even though the internal handler is still wired', () => {
+        it('renders the harness (CCC-Harness) button when a handler is wired', () => {
           render(<Island {...IslandTests.makeProps({ expanded: true, onOpenHarness: vi.fn() })} />)
-          expect(screen.queryByLabelText('Open harness wizard for test-session')).toBeNull()
+          expect(screen.getByLabelText('Open harness wizard for test-session')).toBeDefined()
         })
 
         it('does NOT render an API Sessions group when no api-mode sessions exist (backwards-compatible UI)', () => {

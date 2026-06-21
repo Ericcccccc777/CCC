@@ -30,7 +30,7 @@ export const MODELS_INFO: readonly ModelInfo[] = [
   { id: 'claude-haiku-4-5-20251001', switchAlias: 'haiku',   name: 'Haiku 4.5',  desc: 'Lightweight · Economy' },
 ]
 
-const HARNESS_BUTTON_VISIBLE = false
+const HARNESS_BUTTON_VISIBLE = true
 
 interface ModelPickerStripProps {
   selectedModelId: string
