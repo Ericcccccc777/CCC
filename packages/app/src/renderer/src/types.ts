@@ -11,6 +11,9 @@ import type {
 import type { PlatformCapabilities } from '../../shared/platform'
 import type { HarnessConfig } from './harness-types'
 import type {
+  MagiEnvId, MagiEnvReport, MagiInstalledResult, MagiOpResult, MagiProgress,
+} from '../../shared/magi'
+import type {
   ApiProviderConfig, ApiProviderId, ApiProviderListEntry, ApiTestResult,
 } from '../../shared/api-provider'
 import type { ApiBalanceSnapshot, ApiUsageSnapshot } from '../../shared/api-usage'
@@ -128,6 +131,12 @@ export interface CccBridge {
   harnessLoad:            (workspace: string) => Promise<HarnessConfig | null>
   harnessSave:            (workspace: string, config: HarnessConfig) => Promise<void>
   harnessGenerate:        (workspace: string, config: HarnessConfig) => Promise<HarnessGenerateResult>
+  // CCC-MAGI install flow
+  magiCheckInstalled:     (workspace: string) => Promise<MagiInstalledResult>
+  magiCheckEnv:           () => Promise<MagiEnvReport>
+  magiInstallEnv:         (id: MagiEnvId) => Promise<MagiOpResult>
+  magiInstall:            (workspace: string) => Promise<MagiOpResult>
+  onMagiProgress:         (cb: (p: MagiProgress) => void) => () => void
   // Remote mirror
   getLocalMirrorUrl:      (sessionId: number) => Promise<string>
   // macOS: open System Settings → Accessibility

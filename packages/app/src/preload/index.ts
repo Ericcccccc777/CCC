@@ -16,6 +16,9 @@ import type {
 } from '../shared/api-provider'
 import type { ApiBalanceSnapshot, ApiUsageSnapshot } from '../shared/api-usage'
 import type { CodexReasoningEffort } from '../shared/codex-cli'
+import type {
+  MagiEnvId, MagiEnvReport, MagiInstalledResult, MagiOpResult, MagiProgress,
+} from '../shared/magi'
 
 contextBridge.exposeInMainWorld('ccc', {
   // Renderer asks the main process for the active PlatformAdapter's
@@ -113,6 +116,25 @@ contextBridge.exposeInMainWorld('ccc', {
 
   closeHarnessWindow: (): void =>
     ipcRenderer.send(IPC.HARNESS_CLOSE_WINDOW),
+
+  // ── CCC-MAGI install flow ──
+  magiCheckInstalled: (workspace: string): Promise<MagiInstalledResult> =>
+    ipcRenderer.invoke(IPC.MAGI_CHECK_INSTALLED, workspace),
+
+  magiCheckEnv: (): Promise<MagiEnvReport> =>
+    ipcRenderer.invoke(IPC.MAGI_CHECK_ENV),
+
+  magiInstallEnv: (id: MagiEnvId): Promise<MagiOpResult> =>
+    ipcRenderer.invoke(IPC.MAGI_INSTALL_ENV, id),
+
+  magiInstall: (workspace: string): Promise<MagiOpResult> =>
+    ipcRenderer.invoke(IPC.MAGI_INSTALL, workspace),
+
+  onMagiProgress: (cb: (p: MagiProgress) => void): (() => void) => {
+    const h = (_e: IpcRendererEvent, p: MagiProgress): void => cb(p)
+    ipcRenderer.on(IPC.MAGI_PROGRESS, h)
+    return () => ipcRenderer.removeListener(IPC.MAGI_PROGRESS, h)
+  },
 
   // ── Remote mirror ──
   getLocalMirrorUrl: (sessionId: number): Promise<string> =>

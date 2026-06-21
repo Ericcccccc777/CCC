@@ -13,6 +13,13 @@ import {
   checkWorkspace, loadConfig, saveConfig, generate as generateHarness,
   type HarnessConfig,
 } from './HarnessManager'
+import {
+  isMagiInstalled,
+  checkEnvironment as checkMagiEnvironment,
+  installEnv as installMagiEnv,
+  installMagi,
+} from './MagiManager'
+import type { MagiEnvId } from '../shared/magi'
 import type { PlatformAdapter } from './platform/PlatformAdapter'
 import { createPlatformAdapter } from './platform'
 import { STATUSLINE_RELAY_JS } from './platform/shared'
@@ -933,6 +940,25 @@ class IpcHandlers {
       return generateHarness(workspace, config)
     })
 
+    // ── CCC-MAGI install flow ──
+    ipcMain.handle(IPC.MAGI_CHECK_INSTALLED, (_e, workspace: string) => {
+      return { installed: isMagiInstalled(workspace) }
+    })
+
+    ipcMain.handle(IPC.MAGI_CHECK_ENV, () => {
+      return checkMagiEnvironment()
+    })
+
+    ipcMain.handle(IPC.MAGI_INSTALL_ENV, (e, id: MagiEnvId) => {
+      return installMagiEnv(id, line =>
+        e.sender.send(IPC.MAGI_PROGRESS, { kind: 'env', id, line }))
+    })
+
+    ipcMain.handle(IPC.MAGI_INSTALL, (e, workspace: string) => {
+      return installMagi(workspace, line =>
+        e.sender.send(IPC.MAGI_PROGRESS, { kind: 'magi', line }))
+    })
+
     // Window resize for harness wizard
     ipcMain.on(IPC.HARNESS_EXPAND_WINDOW, () => {
       if (!win) return
@@ -1082,7 +1108,7 @@ class IpcHandlers {
       skipTaskbar:     false,
       hasShadow:       true,
       backgroundColor: '#0a0a0a',
-      title:           'CCC — Harness Wizard',
+      title:           'CCC-MAGI',
       webPreferences: {
         preload:          join(__dirname, '../preload/index.js'),
         nodeIntegration:  false,
