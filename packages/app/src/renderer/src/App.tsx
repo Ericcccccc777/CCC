@@ -432,6 +432,40 @@ export function App(): JSX.Element {
     return () => { cancelled = true }
   }, [])
 
+  // Re-probe Accessibility permission *only while the banner is showing*, so it
+  // clears the moment the user grants it in System Settings — no app restart
+  // needed. This effect never runs when permission was already granted at
+  // launch (the banner never shows), and it tears itself down the instant a
+  // grant is detected, so there's no steady-state polling of the OS. The
+  // probe (`isTrustedAccessibilityClient(false)` in main) re-reads the live
+  // permission on every call, so a fresh grant surfaces here as `true`.
+  useEffect(() => {
+    if (!showAccessibilityWarning) return
+    let cancelled = false
+    const reprobe = async () => {
+      try {
+        const caps = await window.ccc?.getPlatformCapabilities()
+        if (cancelled || !caps) return
+        if (caps.hasAccessibilityPermissionInitially === true) {
+          setShowAccessibilityWarning(false)
+        }
+      } catch { /* IPC unreachable — keep banner, retry next tick */ }
+    }
+    // Instant clear when switching back from System Settings…
+    window.addEventListener('focus', reprobe)
+    document.addEventListener('visibilitychange', reprobe)
+    // …plus a gentle fallback, since the always-on-top click-through overlay
+    // may never receive focus events. One cheap syscall every 2s, and it stops
+    // the moment permission lands.
+    const id = window.setInterval(reprobe, 2_000)
+    return () => {
+      cancelled = true
+      window.removeEventListener('focus', reprobe)
+      document.removeEventListener('visibilitychange', reprobe)
+      window.clearInterval(id)
+    }
+  }, [showAccessibilityWarning])
+
   // Safety timeout: clear spinner if statusLine never fires after a switch
   useEffect(() => {
     if (!isSwitchingModel) return
