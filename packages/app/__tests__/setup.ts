@@ -1,5 +1,13 @@
 import '@testing-library/jest-dom'
+import { configure } from '@testing-library/react'
 import { vi } from 'vitest'
+
+// The default findBy*/waitFor timeout (1000ms) is tight for the heavier
+// multi-step flows (e.g. opening the engine picker and launching several
+// sessions in one test) when the whole suite runs in parallel and CPU is
+// contended. Raise it so those resolve reliably; tests that fail for real
+// (render-time errors) still fail immediately rather than waiting this out.
+configure({ asyncUtilTimeout: 5000 })
 
 // Minimal `window.ccc` stub for renderer-side tests. Components that hit
 // the preload bridge during render (e.g. ApiProvidersPanel's mount-time

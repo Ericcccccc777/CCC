@@ -58,7 +58,7 @@ function notifBudget(n: SessionNotification | null): number {
 // the popup paints below the BrowserWindow's bottom edge and gets clipped.
 // Numbers track each popup's worst-case rendered height + the 6px margin
 // the wrapper flow gives between siblings.
-const POPUP_ENGINE_PICKER = 220   // .engine-picker-popup (title + hint + 2 buttons)
+const POPUP_ENGINE_PICKER = 290   // .engine-picker-popup (title + hint + perm toggle + warning + 2 buttons)
 const POPUP_API_SWITCH    = 230   // .api-switch-popup
 const POPUP_CODEX_SWITCH  = 240   // .codex-switch-popup (effort buttons row)
 const POPUP_QUIT_CONFIRM  = 180   // .quit-confirm-popup
@@ -1186,11 +1186,11 @@ export function App(): JSX.Element {
     ))
   }, [activeId])
 
-  const createClaudeSession = useCallback(async (workspace: string): Promise<void> => {
+  const createClaudeSession = useCallback(async (workspace: string, skipPermissions = false): Promise<void> => {
     // Look up alias for the chosen default; empty string → no --model flag
     const info = MODELS_INFO.find(m => m.id === defaultModelId)
     const modelAlias = info?.switchAlias ?? ''
-    const { sessionId } = await window.ccc.launchSession(workspace, modelAlias)
+    const { sessionId } = await window.ccc.launchSession(workspace, modelAlias, skipPermissions)
     const session: Session = {
       id:            sessionId,
       workspace,
@@ -1216,8 +1216,8 @@ export function App(): JSX.Element {
     return codexStatus?.defaultModelId ?? (codexStatus?.models[0] ?? FALLBACK_CODEX_MODELS[0]).id
   }, [codexStatus])
 
-  const createCodexSession = useCallback(async (workspace: string, modelId: string = defaultCodexModelId()): Promise<void> => {
-    const result = await window.ccc?.codexCliLaunch(workspace, modelId)
+  const createCodexSession = useCallback(async (workspace: string, modelId: string = defaultCodexModelId(), skipPermissions = false): Promise<void> => {
+    const result = await window.ccc?.codexCliLaunch(workspace, modelId, skipPermissions)
     if (!result || !result.ok) {
       console.error('codexCliLaunch failed:', result?.ok === false ? result.error : 'unknown')
       return
@@ -1257,22 +1257,18 @@ export function App(): JSX.Element {
     const claudeAvailable = claudeStatus?.installed !== false
     const codexAvailable = codexStatus === null || codexStatus.installed === true
 
-    if (claudeAvailable && codexAvailable) {
-      setExpanded(false)
-      setShowModelPicker(false)
-      setRemotePopupSessionId(null)
-      setPendingEngineWorkspace(workspace)
+    if (!claudeAvailable && !codexAvailable) {
+      setBackgroundNotification({ type: 'message', message: 'No Claude Code CLI or Codex CLI detected' })
       return
     }
-    if (codexAvailable && !claudeAvailable) {
-      await createCodexSession(workspace)
-      return
-    }
-    if (claudeAvailable) {
-      await createClaudeSession(workspace)
-      return
-    }
-    setBackgroundNotification({ type: 'message', message: 'No Claude Code CLI or Codex CLI detected' })
+
+    // Always open the picker — even with a single CLI installed — so the
+    // permission mode (normal vs full-access) can be chosen for every session.
+    // The picker hides whichever engine is unavailable.
+    setExpanded(false)
+    setShowModelPicker(false)
+    setRemotePopupSessionId(null)
+    setPendingEngineWorkspace(workspace)
   }
 
   const cancelNewSessionEngine = (): void => {
@@ -1280,23 +1276,27 @@ export function App(): JSX.Element {
     releaseMousePassthroughUnlessPointerOverCcc()
   }
 
-  const confirmNewSessionClaude = useCallback(async (): Promise<void> => {
+  const confirmNewSessionClaude = useCallback(async (skipPermissions: boolean): Promise<void> => {
     if (!pendingEngineWorkspace) return
     setNewSessionBusy(true)
     try {
-      await createClaudeSession(pendingEngineWorkspace)
+      await createClaudeSession(pendingEngineWorkspace, skipPermissions)
       setPendingEngineWorkspace(null)
+      // addSession collapsed the panel to surface the picker; re-expand so the
+      // new session (and the New Session button) are visible again.
+      setExpanded(true)
     } finally {
       setNewSessionBusy(false)
     }
   }, [createClaudeSession, pendingEngineWorkspace])
 
-  const confirmNewSessionCodex = useCallback(async (): Promise<void> => {
+  const confirmNewSessionCodex = useCallback(async (skipPermissions: boolean): Promise<void> => {
     if (!pendingEngineWorkspace) return
     setNewSessionBusy(true)
     try {
-      await createCodexSession(pendingEngineWorkspace)
+      await createCodexSession(pendingEngineWorkspace, undefined, skipPermissions)
       setPendingEngineWorkspace(null)
+      setExpanded(true)
     } finally {
       setNewSessionBusy(false)
     }
@@ -1601,8 +1601,10 @@ export function App(): JSX.Element {
       {pendingEngineWorkspace && (
         <NewSessionEnginePopup
           busy={newSessionBusy}
-          onSelectClaude={() => void confirmNewSessionClaude()}
-          onSelectCodex={() => void confirmNewSessionCodex()}
+          claudeAvailable={claudeStatus?.installed !== false}
+          codexAvailable={codexStatus === null || codexStatus.installed === true}
+          onSelectClaude={(skip) => void confirmNewSessionClaude(skip)}
+          onSelectCodex={(skip) => void confirmNewSessionCodex(skip)}
           onCancel={cancelNewSessionEngine}
         />
       )}

@@ -9,6 +9,10 @@ export interface LaunchInteractiveOptions {
   readonly sessionId:            number
   readonly port:                 number
   readonly statuslineScriptPath: string
+  // Full-access mode: launch `claude --dangerously-skip-permissions` so the
+  // agent never stops for permission prompts. Off by default. Only set when
+  // the user explicitly picks full-access in the new-session engine picker.
+  readonly skipPermissions?:     boolean
   // Extra env vars to set inside the spawned `claude` process. Used by
   // API-provider mode to inject ANTHROPIC_BASE_URL / ANTHROPIC_AUTH_TOKEN
   // so Claude Code talks to DeepSeek instead of Anthropic. Adapters MUST
@@ -84,6 +88,10 @@ export interface LaunchCodexSessionOptions {
   readonly workspace: string
   readonly modelId:   string
   readonly sessionId: number
+  // Full-access mode: launch `codex --dangerously-bypass-approvals-and-sandbox`
+  // (Codex's equivalent of Claude's --dangerously-skip-permissions) so the
+  // agent runs without approval gates or sandbox. Off by default.
+  readonly skipPermissions?: boolean
 }
 
 export interface ResolveSessionTtyOptions {

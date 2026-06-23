@@ -8,7 +8,11 @@ export default defineConfig({
     environment: 'jsdom',
     globals: true,
     setupFiles: ['./__tests__/setup.ts'],
-    include: ['./__tests__/**/*.test.{ts,tsx}']
+    include: ['./__tests__/**/*.test.{ts,tsx}'],
+    // The heavier multi-step renderer flows (engine picker → launch several
+    // sessions in one test) run long enough under contended parallel CPU to
+    // brush past the 5s default. Give them headroom so the suite is stable.
+    testTimeout: 15000
   },
   resolve: {
     alias: {

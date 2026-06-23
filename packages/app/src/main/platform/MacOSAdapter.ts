@@ -398,13 +398,14 @@ export class MacOSAdapter implements PlatformAdapter {
   }
 
   launchInteractive(opts: LaunchInteractiveOptions): LaunchResult {
-    const { workspace, modelId, sessionId, port, env } = opts
+    const { workspace, modelId, sessionId, port, env, skipPermissions } = opts
 
     const inner   = join(this.tmp, `ccc-inner-${sessionId}.sh`)
     const watcher = join(this.tmp, `ccc-watcher-${sessionId}.sh`)
     const pidFile = join(this.tmp, `ccc-pid-${sessionId}.txt`)
 
     const modelArg = modelId ? ` --model ${modelId}` : ''
+    const permArg  = skipPermissions ? ' --dangerously-skip-permissions' : ''
 
     const extraEnvLines = buildShellEnvExports(env)
 
@@ -417,7 +418,7 @@ export class MacOSAdapter implements PlatformAdapter {
       `export CCC_SESSION_ID='${sessionId}'`,
       ...extraEnvLines,
       `echo $$ > '${shq(pidFile)}'`,
-      `exec claude${modelArg}`,
+      `exec claude${modelArg}${permArg}`,
       '',
     ].join('\n'), { mode: 0o755 })
 
@@ -488,13 +489,14 @@ export class MacOSAdapter implements PlatformAdapter {
   }
 
   launchCodexSession(opts: LaunchCodexSessionOptions): LaunchResult {
-    const { workspace, modelId, sessionId } = opts
+    const { workspace, modelId, sessionId, skipPermissions } = opts
 
     const inner   = join(this.tmp, `ccc-codex-inner-${sessionId}.sh`)
     const watcher = join(this.tmp, `ccc-codex-watcher-${sessionId}.sh`)
     const pidFile = join(this.tmp, `ccc-codex-pid-${sessionId}.txt`)
 
     const modelArg = modelId ? ` --model '${shq(modelId)}'` : ''
+    const permArg  = skipPermissions ? ' --dangerously-bypass-approvals-and-sandbox' : ''
 
     writeFileSync(inner, [
       '#!/bin/sh',
@@ -503,7 +505,7 @@ export class MacOSAdapter implements PlatformAdapter {
       `export CCC_ENGINE='codex'`,
       `export CCC_SESSION_ID='${sessionId}'`,
       `echo $$ > '${shq(pidFile)}'`,
-      `exec codex${modelArg}`,
+      `exec codex${modelArg}${permArg}`,
       '',
     ].join('\n'), { mode: 0o755 })
 

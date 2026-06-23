@@ -45,16 +45,18 @@ export function buildCodexPowerShellScripts(opts: {
   readonly modelId: string
   readonly inner: string
   readonly pidFile: string
+  readonly skipPermissions?: boolean
 }): { readonly inner: string; readonly outer: string } {
   const escWs    = opts.workspace.replace(/'/g, "''")
   const escInner = opts.inner.replace(/'/g, "''")
   const escPid   = opts.pidFile.replace(/'/g, "''")
   const modelArg = opts.modelId ? ` --model '${opts.modelId.replace(/'/g, "''")}'` : ''
+  const permArg  = opts.skipPermissions ? ' --dangerously-bypass-approvals-and-sandbox' : ''
 
   return {
     inner: [
       `Set-Location '${escWs}'`,
-      `codex${modelArg}`,
+      `codex${modelArg}${permArg}`,
     ].join('\n'),
     outer: [
       `$proc = Start-Process powershell.exe -ArgumentList '-ExecutionPolicy','Bypass','-NoExit','-File','${escInner}' -PassThru`,
@@ -72,7 +74,7 @@ export class WindowsAdapter implements PlatformAdapter {
   }
 
   launchInteractive(opts: LaunchInteractiveOptions): LaunchResult {
-    const { workspace, modelId, sessionId, port, env } = opts
+    const { workspace, modelId, sessionId, port, env, skipPermissions } = opts
 
     const inner   = join(this.tmp, `ccc-inner-${sessionId}.ps1`)
     const outer   = join(this.tmp, `ccc-outer-${sessionId}.ps1`)
@@ -82,6 +84,7 @@ export class WindowsAdapter implements PlatformAdapter {
     const escInner = inner.replace(/'/g, "''")
     const escPid   = pidFile.replace(/'/g, "''")
     const modelArg = modelId ? ` --model ${modelId}` : ''
+    const permArg  = skipPermissions ? ' --dangerously-skip-permissions' : ''
 
     const extraEnvLines = buildPowerShellEnvLines(env)
 
@@ -90,7 +93,7 @@ export class WindowsAdapter implements PlatformAdapter {
       `$env:CCC_SESSION_ID = '${sessionId}'`,
       ...extraEnvLines,
       `Set-Location '${escWs}'`,
-      `claude${modelArg}`,
+      `claude${modelArg}${permArg}`,
     ].join('\n'), 'utf8')
 
     writeFileSync(outer, [
@@ -139,13 +142,13 @@ export class WindowsAdapter implements PlatformAdapter {
   }
 
   launchCodexSession(opts: LaunchCodexSessionOptions): LaunchResult {
-    const { workspace, modelId, sessionId } = opts
+    const { workspace, modelId, sessionId, skipPermissions } = opts
 
     const inner   = join(this.tmp, `ccc-codex-inner-${sessionId}.ps1`)
     const outer   = join(this.tmp, `ccc-codex-outer-${sessionId}.ps1`)
     const pidFile = join(this.tmp, `ccc-codex-pid-${sessionId}.txt`)
 
-    const scripts = buildCodexPowerShellScripts({ workspace, modelId, inner, pidFile })
+    const scripts = buildCodexPowerShellScripts({ workspace, modelId, inner, pidFile, skipPermissions })
 
     writeFileSync(inner, scripts.inner, 'utf8')
     writeFileSync(outer, scripts.outer, 'utf8')

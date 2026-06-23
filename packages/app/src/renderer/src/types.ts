@@ -110,7 +110,7 @@ export interface CccBridge {
   getPlatformCapabilities: () => Promise<PlatformCapabilities>
   setIgnoreMouseEvents:   (ignore: boolean) => void
   openFolderDialog:       () => Promise<string | null>
-  launchSession:          (workspace: string, modelId: string) => Promise<{ sessionId: number }>
+  launchSession:          (workspace: string, modelId: string, skipPermissions?: boolean) => Promise<{ sessionId: number }>
   killSession:            (sessionId: number) => void
   onSessionClosed:        (cb: (sessionId: number) => void) => () => void
   onSessionStateChanged:  (cb: (update: SessionStateUpdate) => void) => () => void
@@ -160,7 +160,7 @@ export interface CccBridge {
   // Codex CLI — standalone session engine
   codexCliDetect:    () => Promise<import('../../shared/codex-cli').CodexCliStatus>
   codexCliRedetect:  () => Promise<import('../../shared/codex-cli').CodexCliStatus>
-  codexCliLaunch:  (workspace: string, modelId: string) => Promise<{ ok: true; sessionId: number } | { ok: false; error: string }>
+  codexCliLaunch:  (workspace: string, modelId: string, skipPermissions?: boolean) => Promise<{ ok: true; sessionId: number } | { ok: false; error: string }>
   codexCliSelectModel: (sessionId: number, modelMenuIndex: number, effort: CodexReasoningEffort) => void
   listKnownSessions: () => Promise<readonly SessionRestored[]>
   // App lifecycle — Settings → Quit. Fire-and-forget; main kills all

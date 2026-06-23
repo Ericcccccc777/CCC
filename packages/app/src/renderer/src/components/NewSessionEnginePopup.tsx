@@ -1,17 +1,24 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { useLang } from '../i18n'
 
 export interface NewSessionEnginePopupProps {
-  busy:           boolean
-  onSelectClaude: () => void
-  onSelectCodex:  () => void
-  onCancel:       () => void
+  busy:            boolean
+  claudeAvailable: boolean
+  codexAvailable:  boolean
+  onSelectClaude:  (skipPermissions: boolean) => void
+  onSelectCodex:   (skipPermissions: boolean) => void
+  onCancel:        () => void
 }
 
 export function NewSessionEnginePopup({
-  busy, onSelectClaude, onSelectCodex, onCancel,
+  busy, claudeAvailable, codexAvailable, onSelectClaude, onSelectCodex, onCancel,
 }: NewSessionEnginePopupProps): JSX.Element {
   const t = useLang()
+
+  // Full-access launches `claude --dangerously-skip-permissions` /
+  // `codex --dangerously-bypass-approvals-and-sandbox`. Off by default so the
+  // safe path is the one a user gets without thinking about it.
+  const [fullAccess, setFullAccess] = useState(false)
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => { if (e.key === 'Escape') onCancel() }
@@ -35,23 +42,54 @@ export function NewSessionEnginePopup({
       <div className="engine-picker-popup__title">{t.newSessionEngineTitle}</div>
       <div className="engine-picker-popup__hint">{t.newSessionEngineHint}</div>
 
+      <div className="engine-picker-popup__perm" role="radiogroup" aria-label={t.newSessionPermLabel}>
+        <span className="engine-picker-popup__perm-label">{t.newSessionPermLabel}</span>
+        <div className="engine-picker-popup__seg">
+          <button
+            className={`engine-picker-popup__seg-btn${!fullAccess ? ' is-active' : ''}`}
+            role="radio"
+            aria-checked={!fullAccess}
+            disabled={busy}
+            onClick={() => setFullAccess(false)}
+          >
+            {t.newSessionPermNormal}
+          </button>
+          <button
+            className={`engine-picker-popup__seg-btn engine-picker-popup__seg-btn--full${fullAccess ? ' is-active' : ''}`}
+            role="radio"
+            aria-checked={fullAccess}
+            disabled={busy}
+            onClick={() => setFullAccess(true)}
+          >
+            {t.newSessionPermFull}
+          </button>
+        </div>
+      </div>
+      {fullAccess && (
+        <div className="engine-picker-popup__perm-warn">{t.newSessionPermFullHint}</div>
+      )}
+
       <div className="engine-picker-popup__actions">
-        <button
-          className="engine-picker-popup__btn"
-          disabled={busy}
-          onClick={onSelectClaude}
-        >
-          <span className="engine-picker-popup__name">{t.claudeCodeCli}</span>
-          <span className="engine-picker-popup__desc">{t.newSessionClaudeHint}</span>
-        </button>
-        <button
-          className="engine-picker-popup__btn engine-picker-popup__btn--codex"
-          disabled={busy}
-          onClick={onSelectCodex}
-        >
-          <span className="engine-picker-popup__name">{t.codexCli}</span>
-          <span className="engine-picker-popup__desc">{t.newSessionCodexHint}</span>
-        </button>
+        {claudeAvailable && (
+          <button
+            className="engine-picker-popup__btn"
+            disabled={busy}
+            onClick={() => onSelectClaude(fullAccess)}
+          >
+            <span className="engine-picker-popup__name">{t.claudeCodeCli}</span>
+            <span className="engine-picker-popup__desc">{t.newSessionClaudeHint}</span>
+          </button>
+        )}
+        {codexAvailable && (
+          <button
+            className="engine-picker-popup__btn engine-picker-popup__btn--codex"
+            disabled={busy}
+            onClick={() => onSelectCodex(fullAccess)}
+          >
+            <span className="engine-picker-popup__name">{t.codexCli}</span>
+            <span className="engine-picker-popup__desc">{t.newSessionCodexHint}</span>
+          </button>
+        )}
       </div>
 
       <div className="api-switch-popup__esc">{t.esc}: {t.apiCancel}</div>

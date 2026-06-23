@@ -272,7 +272,7 @@ class SessionManager {
     }
   }
 
-  launch(workspace: string, modelId: string): number {
+  launch(workspace: string, modelId: string, skipPermissions = false): number {
     const id = this.nextId++
     const p  = this.port
 
@@ -289,6 +289,7 @@ class SessionManager {
       sessionId:            id,
       port:                 p,
       statuslineScriptPath: statuslineScript,
+      skipPermissions,
     })
 
     const entry: SessionEntry = {
@@ -575,6 +576,7 @@ class SessionManager {
   launchCodex(
     workspace: string,
     modelId:   string,
+    skipPermissions = false,
   ): { ok: true; sessionId: number } | { ok: false; error: string } {
     const id = this.nextId++
 
@@ -582,6 +584,7 @@ class SessionManager {
       workspace,
       modelId,
       sessionId: id,
+      skipPermissions,
     })
 
     const entry: SessionEntry = {
@@ -861,8 +864,8 @@ class IpcHandlers {
       return r.canceled ? null : r.filePaths[0] ?? null
     })
 
-    ipcMain.handle(IPC.LAUNCH_SESSION, (_e, workspace: string, modelId: string) => {
-      const sessionId = this.manager!.launch(workspace, modelId)
+    ipcMain.handle(IPC.LAUNCH_SESSION, (_e, workspace: string, modelId: string, skipPermissions = false) => {
+      const sessionId = this.manager!.launch(workspace, modelId, skipPermissions)
       return { sessionId }
     })
 
@@ -1078,9 +1081,9 @@ class IpcHandlers {
       return this.codexManager.redetect()
     })
 
-    ipcMain.handle(IPC.CODEX_CLI_LAUNCH, (_e, workspace: string, modelId: string) => {
+    ipcMain.handle(IPC.CODEX_CLI_LAUNCH, (_e, workspace: string, modelId: string, skipPermissions = false) => {
       if (!this.manager) return { ok: false as const, error: 'manager-not-ready' }
-      return this.manager.launchCodex(workspace, modelId)
+      return this.manager.launchCodex(workspace, modelId, skipPermissions)
     })
   }
 

@@ -88,7 +88,8 @@ class AppTests {
 
         AppTests.openExpandedPanel()
         fireEvent.click(await screen.findByText('New Session'))
-        await waitFor(() => expect(window.ccc.launchSession).toHaveBeenCalledWith('/tmp/workspace-a', ''))
+        fireEvent.click(await screen.findByText('Claude Code CLI'))
+        await waitFor(() => expect(window.ccc.launchSession).toHaveBeenCalledWith('/tmp/workspace-a', '', false))
 
         fireEvent.mouseMove(document.querySelector('.island-wrapper')!, { clientX: 999, clientY: 999 })
         expect(window.ccc.setIgnoreMouseEvents).toHaveBeenLastCalledWith(false)
@@ -168,9 +169,11 @@ class AppTests {
         await waitFor(() => expect(window.ccc.codexCliDetect).toHaveBeenCalledWith())
         AppTests.openExpandedPanel()
         fireEvent.click(await screen.findByText('New Session'))
-        await waitFor(() => expect(window.ccc.launchSession).toHaveBeenCalledWith('/tmp/one', ''))
-        fireEvent.click(screen.getByText('New Session'))
-        await waitFor(() => expect(window.ccc.launchSession).toHaveBeenCalledWith('/tmp/two', ''))
+        fireEvent.click(await screen.findByText('Claude Code CLI'))
+        await waitFor(() => expect(window.ccc.launchSession).toHaveBeenCalledWith('/tmp/one', '', false))
+        fireEvent.click(await screen.findByText('New Session'))
+        fireEvent.click(await screen.findByText('Claude Code CLI'))
+        await waitFor(() => expect(window.ccc.launchSession).toHaveBeenCalledWith('/tmp/two', '', false))
 
         fireEvent.mouseEnter(document.querySelector('.island-wrapper')!)
         expect(window.ccc.setIgnoreMouseEvents).toHaveBeenLastCalledWith(false)
@@ -181,9 +184,10 @@ class AppTests {
         expect(window.ccc.focusSession).toHaveBeenCalledWith(1)
         expect(window.ccc.setIgnoreMouseEvents).toHaveBeenLastCalledWith(false)
 
-        fireEvent.click(screen.getByText('New Session'))
+        fireEvent.click(await screen.findByText('New Session'))
+        fireEvent.click(await screen.findByText('Claude Code CLI'))
 
-        await waitFor(() => expect(window.ccc.launchSession).toHaveBeenCalledWith('/tmp/three', ''))
+        await waitFor(() => expect(window.ccc.launchSession).toHaveBeenCalledWith('/tmp/three', '', false))
       })
 
       it('restores mouse passthrough after an outside click collapses CCC', async () => {
@@ -208,7 +212,8 @@ class AppTests {
 
         AppTests.openExpandedPanel()
         fireEvent.click(await screen.findByText('New Session'))
-        await waitFor(() => expect(window.ccc.launchSession).toHaveBeenCalledWith('/tmp/workspace-a', ''))
+        fireEvent.click(await screen.findByText('Claude Code CLI'))
+        await waitFor(() => expect(window.ccc.launchSession).toHaveBeenCalledWith('/tmp/workspace-a', '', false))
 
         fireEvent.mouseEnter(document.querySelector('.island-wrapper')!)
         fireEvent.click(document.querySelector('.island-pill')!)
@@ -278,7 +283,7 @@ class AppTests {
         fireEvent.click(await screen.findByText('Codex CLI'))
 
         await waitFor(() => {
-          expect(window.ccc.codexCliLaunch).toHaveBeenCalledWith('/tmp/workspace-a', 'gpt-5.4')
+          expect(window.ccc.codexCliLaunch).toHaveBeenCalledWith('/tmp/workspace-a', 'gpt-5.4', false)
         })
         expect(window.ccc.launchSession).not.toHaveBeenCalled()
       })
@@ -302,7 +307,7 @@ class AppTests {
         fireEvent.click(await screen.findByText('Codex CLI'))
 
         await waitFor(() => {
-          expect(window.ccc.codexCliLaunch).toHaveBeenCalledWith('/tmp/workspace-a', 'gpt-5.4')
+          expect(window.ccc.codexCliLaunch).toHaveBeenCalledWith('/tmp/workspace-a', 'gpt-5.4', false)
         })
 
         fireEvent.click(await screen.findByRole('button', { name: /gpt-5\.4/i }))
@@ -334,9 +339,14 @@ class AppTests {
         await waitFor(() => expect(window.ccc.codexCliDetect).toHaveBeenCalled())
         AppTests.openExpandedPanel()
         fireEvent.click(await screen.findByText('New Session'))
-        await waitFor(() => expect(window.ccc.launchSession).toHaveBeenCalledWith('/tmp/one', ''))
-        fireEvent.click(screen.getByText('New Session'))
-        await waitFor(() => expect(window.ccc.launchSession).toHaveBeenCalledWith('/tmp/two', ''))
+        fireEvent.click(await screen.findByText('Claude Code CLI'))
+        await waitFor(() => expect(window.ccc.launchSession).toHaveBeenCalledWith('/tmp/one', '', false))
+        fireEvent.click(await screen.findByText('New Session'))
+        fireEvent.click(await screen.findByText('Claude Code CLI'))
+        await waitFor(() => expect(window.ccc.launchSession).toHaveBeenCalledWith('/tmp/two', '', false))
+        // Wait until session two is committed/active so the latest onSessionClosed
+        // handler (which closes over activeId) sees activeId === 2 before we close 1.
+        await screen.findByText('two')
 
         const closed = closedHandlers[closedHandlers.length - 1]
         if (!closed) throw new Error('session close listener was not registered')

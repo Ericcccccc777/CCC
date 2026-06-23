@@ -88,6 +88,10 @@ export interface Translations {
   newSessionEngineHint:  string
   newSessionClaudeHint:  string
   newSessionCodexHint:   string
+  newSessionPermLabel:   string
+  newSessionPermNormal:  string
+  newSessionPermFull:    string
+  newSessionPermFullHint: string
   codexProcessState:     string
   backgroundEnded:       string
   recoverCapabilityFull: string
@@ -287,6 +291,10 @@ const en: Translations = {
   newSessionEngineHint:  'Choose which CLI to use.',
   newSessionClaudeHint:  'Claude hooks, DeepSeek, usage and context.',
   newSessionCodexHint:   'Codex CLI process with basic local state.',
+  newSessionPermLabel:   'Permissions',
+  newSessionPermNormal:  'Normal',
+  newSessionPermFull:    'Full Access',
+  newSessionPermFullHint: 'Skips every permission prompt. Use only in workspaces you trust.',
   codexProcessState:     'Process state',
   backgroundEnded:       'process ended',
   recoverCapabilityFull: 'Full monitoring',
@@ -475,6 +483,10 @@ const zh: Translations = {
   newSessionEngineHint:  '选择要使用的 CLI。',
   newSessionClaudeHint:  'Claude hooks、DeepSeek、usage 和 context。',
   newSessionCodexHint:   'Codex CLI 进程与基础本地状态。',
+  newSessionPermLabel:   '权限',
+  newSessionPermNormal:  '普通',
+  newSessionPermFull:    '全权限',
+  newSessionPermFullHint: '跳过所有权限提示，请仅在信任的工作区使用。',
   codexProcessState:     '进程状态',
   backgroundEnded:       '进程已结束',
   recoverCapabilityFull: '完整监控',
@@ -663,6 +675,10 @@ const ko: Translations = {
   newSessionEngineHint:  '사용할 CLI를 선택하세요.',
   newSessionClaudeHint:  'Claude hooks, DeepSeek, usage 및 context.',
   newSessionCodexHint:   'Codex CLI 프로세스와 기본 로컬 상태.',
+  newSessionPermLabel:   '권한',
+  newSessionPermNormal:  '일반',
+  newSessionPermFull:    '전체 권한',
+  newSessionPermFullHint: '모든 권한 프롬프트를 건너뜁니다. 신뢰하는 작업 공간에서만 사용하세요.',
   codexProcessState:     '프로세스 상태',
   backgroundEnded:       '프로세스 종료됨',
   recoverCapabilityFull: '전체 모니터링',
@@ -788,14 +804,25 @@ interface LangContextValue {
 
 const LangContext = createContext<LangContextValue | null>(null)
 
+// localStorage can be absent or throw (private-mode quirks, embedded/headless
+// environments, test runners that tear the global down) — never let language
+// persistence crash the whole renderer.
+function readStoredLang(): LangCode | null {
+  try {
+    const saved = globalThis.localStorage?.getItem('ccc-lang')
+    return (saved === 'zh' || saved === 'ko') ? saved : null
+  } catch { return null }
+}
+
+function writeStoredLang(code: LangCode): void {
+  try { globalThis.localStorage?.setItem('ccc-lang', code) } catch { /* non-fatal */ }
+}
+
 export function LangProvider({ children }: { children: ReactNode }): JSX.Element {
-  const [lang, setLangState] = useState<LangCode>(() => {
-    const saved = localStorage.getItem('ccc-lang')
-    return (saved === 'zh' || saved === 'ko') ? saved : 'en'
-  })
+  const [lang, setLangState] = useState<LangCode>(() => readStoredLang() ?? 'en')
 
   const setLang = (code: LangCode): void => {
-    localStorage.setItem('ccc-lang', code)
+    writeStoredLang(code)
     setLangState(code)
   }
 

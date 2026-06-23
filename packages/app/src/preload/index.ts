@@ -32,8 +32,8 @@ contextBridge.exposeInMainWorld('ccc', {
   openFolderDialog: (): Promise<string | null> =>
     ipcRenderer.invoke(IPC.OPEN_FOLDER_DIALOG),
 
-  launchSession: (workspace: string, modelId: string): Promise<{ sessionId: number }> =>
-    ipcRenderer.invoke(IPC.LAUNCH_SESSION, workspace, modelId),
+  launchSession: (workspace: string, modelId: string, skipPermissions = false): Promise<{ sessionId: number }> =>
+    ipcRenderer.invoke(IPC.LAUNCH_SESSION, workspace, modelId, skipPermissions),
 
   killSession: (sessionId: number): void =>
     ipcRenderer.send(IPC.KILL_SESSION, sessionId),
@@ -203,8 +203,8 @@ contextBridge.exposeInMainWorld('ccc', {
   codexCliRedetect: (): Promise<import('../shared/codex-cli').CodexCliStatus> =>
     ipcRenderer.invoke(IPC.CODEX_CLI_REDETECT),
 
-  codexCliLaunch: (workspace: string, modelId: string): Promise<{ ok: true; sessionId: number } | { ok: false; error: string }> =>
-    ipcRenderer.invoke(IPC.CODEX_CLI_LAUNCH, workspace, modelId),
+  codexCliLaunch: (workspace: string, modelId: string, skipPermissions = false): Promise<{ ok: true; sessionId: number } | { ok: false; error: string }> =>
+    ipcRenderer.invoke(IPC.CODEX_CLI_LAUNCH, workspace, modelId, skipPermissions),
 
   codexCliSelectModel: (sessionId: number, modelMenuIndex: number, effort: CodexReasoningEffort): void =>
     ipcRenderer.send(IPC.CODEX_CLI_SELECT_MODEL, sessionId, modelMenuIndex, effort),
