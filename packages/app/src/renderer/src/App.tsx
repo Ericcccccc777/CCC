@@ -960,7 +960,11 @@ export function App(): JSX.Element {
 
         const notification: SessionNotification | null =
           update.message    ? { type: 'message',    message: update.message } :
-          update.state === 'done' ? { type: 'done' } :
+          // Turn finished (stop hook → state 'done'): intentionally show NO
+          // popup. The pill's done icon (driven by `state`, not the
+          // notification) already signals completion; the "response complete"
+          // bubble that used to pop up after every turn added nothing.
+          update.state === 'done' ? null :
           // No explicit notification-bearing field and no lifecycle change →
           // keep whatever popup the user is already looking at.
           update.state === undefined ? s.notification :
