@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { shouldDeferCloseForRecovery, shouldRespawnClosedWatcher } from '../src/main/session-recovery-policy'
+import { shouldDeferCloseForRecovery, shouldRespawnClosedWatcher, shouldFinalizeUnexpectedClose } from '../src/main/session-recovery-policy'
 
 class SessionRecoveryPolicyTests {
   static run(): void {
@@ -42,6 +42,36 @@ class SessionRecoveryPolicyTests {
           innerPidAlive:      true,
           userInitiatedClose: true,
         })).toBe(false)
+      })
+
+      it('finalizes a dead session immediately when not in a recovery hold (e.g. terminal closed)', () => {
+        expect(shouldFinalizeUnexpectedClose({
+          recoveryHoldActive: false,
+          innerProcessAlive:  false,
+          isLastAttempt:      false,
+        })).toBe(true)
+      })
+
+      it('never finalizes while the inner process is still alive', () => {
+        expect(shouldFinalizeUnexpectedClose({
+          recoveryHoldActive: false,
+          innerProcessAlive:  true,
+          isLastAttempt:      true,
+        })).toBe(false)
+      })
+
+      it('keeps retrying a dead session during a sleep/resume hold until the last attempt', () => {
+        expect(shouldFinalizeUnexpectedClose({
+          recoveryHoldActive: true,
+          innerProcessAlive:  false,
+          isLastAttempt:      false,
+        })).toBe(false)
+        // …but gives up on the final attempt so it can't linger forever
+        expect(shouldFinalizeUnexpectedClose({
+          recoveryHoldActive: true,
+          innerProcessAlive:  false,
+          isLastAttempt:      true,
+        })).toBe(true)
       })
     })
   }

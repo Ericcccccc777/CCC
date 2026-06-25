@@ -40,7 +40,7 @@ import { ClaudeCliManager } from './ClaudeCliManager'
 import { CodexManager } from './CodexManager'
 import { codexReasoningEffortMenuIndex, type CodexReasoningEffort } from '../shared/codex-cli'
 import { CLAUDE_REASONING_EFFORTS, type ClaudeReasoningEffort } from '../shared/claude-cli'
-import { shouldDeferCloseForRecovery, shouldRespawnClosedWatcher } from './session-recovery-policy'
+import { shouldDeferCloseForRecovery, shouldRespawnClosedWatcher, shouldFinalizeUnexpectedClose } from './session-recovery-policy'
 
 const WIN_WIDTH  = 400
 const WIN_HEIGHT = 520
@@ -203,13 +203,39 @@ class SessionManager {
     if (this.unexpectedCloseRecovery.has(sessionId)) return
     this.unexpectedCloseRecovery.add(sessionId)
     this.flushRegistry()
-    for (const delayMs of [1000, 3000, 7000, 15000, 30000, 60000]) {
+    const delays = [1000, 3000, 7000, 15000, 30000, 60000]
+    delays.forEach((delayMs, i) => {
       setTimeout(() => {
         const current = this.sessions.get(sessionId)
-        if (!current || current.proc !== entry.proc) return
-        this.recoverSessionProcess(sessionId, current, false)
+        if (!current || current.proc !== entry.proc) return       // already resolved/replaced
+        if (this.recoverSessionProcess(sessionId, current, false)) return  // re-attached to a live process
+        // Recovery failed. If the inner process is genuinely gone (terminal
+        // closed, /quit, crash) and we're not mid sleep/resume hold, finalize
+        // the close so the session leaves CCC instead of lingering forever.
+        if (shouldFinalizeUnexpectedClose({
+          recoveryHoldActive: this.isRecoveryHoldActive(),
+          innerProcessAlive:  this.isInnerProcessAlive(current),
+          isLastAttempt:      i === delays.length - 1,
+        })) {
+          this.finalizeUnexpectedClose(sessionId, current)
+        }
       }, delayMs)
-    }
+    })
+  }
+
+  private isInnerProcessAlive(entry: SessionEntry): boolean {
+    const pid = this.readInnerPid(entry)
+    return pid != null && this.adapter.isPidAlive(pid)
+  }
+
+  // End a session whose process is gone and could not be recovered: tear down,
+  // drop it from the live map + recovery set, persist, and notify the renderer.
+  private finalizeUnexpectedClose(sessionId: number, entry: SessionEntry): void {
+    this.unexpectedCloseRecovery.delete(sessionId)
+    this.cleanup(entry, sessionId)
+    this.sessions.delete(sessionId)
+    this.flushRegistry()
+    this.onClosed(sessionId)
   }
 
   private flushRegistry(opts: { readonly clearWhenEmptyDuringRecovery?: boolean } = {}): void {
