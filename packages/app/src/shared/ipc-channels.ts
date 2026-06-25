@@ -51,7 +51,7 @@ export const IPC = {
   MAGI_UPDATE:             'magi:update',
   MAGI_PROGRESS:           'magi:progress',
   // Remote mirror
-  REMOTE_MIRROR_URL:       'remote:mirror-url',
+  MARK_SESSION_REMOTE:     'remote:mark-session',
   // Platform capabilities (renderer probes for accessibility-permission UI etc.)
   PLATFORM_GET_CAPABILITIES:        'platform:get-capabilities',
   OPEN_ACCESSIBILITY_SETTINGS:      'platform:open-accessibility-settings',

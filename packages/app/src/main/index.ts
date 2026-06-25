@@ -6,7 +6,6 @@ import { tmpdir } from 'os'
 import { IPC } from '../shared/ipc-channels'
 import { HookServer } from './HookServer'
 import { CodexSessionWatcher } from './CodexSessionWatcher'
-import { MirrorServer } from './MirrorServer'
 import { ClaudeSettingsManager } from './ClaudeSettingsManager'
 import { SessionPersistence, PersistedSession } from './SessionPersistence'
 import {
@@ -1083,9 +1082,12 @@ class IpcHandlers {
       }
     })
 
-    // ── Remote mirror ──
-    ipcMain.handle(IPC.REMOTE_MIRROR_URL, (_e, sessionId: number) => {
-      return this.hooks.mirrorUrl(sessionId)
+    // ── Remote control (Claude Code native) ──
+    // Mark a session as remote-driven so its PreToolUse hook passes through to
+    // Claude Code's native permission prompt (→ mobile push) instead of CCC's
+    // desktop popup. The renderer also injects `/remote-control` to connect it.
+    ipcMain.on(IPC.MARK_SESSION_REMOTE, (_e, sessionId: number) => {
+      this.hooks.registerRemoteSession(sessionId)
     })
 
     // ── Platform capabilities (renderer-side accessibility banner etc.) ──
@@ -1312,7 +1314,6 @@ class IpcHandlers {
 class AppWindow {
   private win:         BrowserWindow | null = null
   private hookSrv      = new HookServer()
-  private mirrorSrv    = new MirrorServer()
   private handlers:    IpcHandlers | null = null
   private persistence  = new SessionPersistence()
   private adapter:     PlatformAdapter = createPlatformAdapter()
@@ -1323,8 +1324,6 @@ class AppWindow {
 
   async create(): Promise<void> {
     await this.hookSrv.start()
-    await this.mirrorSrv.start()
-    this.hookSrv.setMirrorServer(this.mirrorSrv)
     this.handlers = new IpcHandlers(this.hookSrv, this.adapter, this.persistence)
 
     const { width: sw } = screen.getPrimaryDisplay().workAreaSize
@@ -1406,7 +1405,6 @@ class AppWindow {
 
     this.win.on('closed', () => {
       this.handlers?.cleanup()
-      this.mirrorSrv.stop()
     })
 
     // Renderer-initiated full quit (Settings → Quit button). app.quit()

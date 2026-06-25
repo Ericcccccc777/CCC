@@ -1023,6 +1023,8 @@ export function App(): JSX.Element {
           ...s,
           ...(update.model      !== undefined && { model:      update.model }),
           ...(update.contextPct !== undefined && { contextPct: update.contextPct }),
+          ...(update.contextTokens     !== undefined && { contextTokens:     update.contextTokens }),
+          ...(update.contextWindowSize !== undefined && { contextWindowSize: update.contextWindowSize }),
           ...(update.usagePct5h !== undefined && { usagePct:   update.usagePct5h }),
           ...(update.usagePct7d !== undefined && { weeklyPct:  update.usagePct7d }),
           ...(update.reset5hAt  !== undefined && { reset5hAt:  update.reset5hAt }),
@@ -1038,7 +1040,9 @@ export function App(): JSX.Element {
 
   const displayState: AppState = activeSession?.state ?? 'idle'
   const displayModel  = activeSession?.model ?? '—'
-  const contextPct    = activeSession?.contextPct ?? 0
+  const contextPct        = activeSession?.contextPct ?? 0
+  const contextTokens     = activeSession?.contextTokens
+  const contextWindowSize = activeSession?.contextWindowSize
   const usagePct      = activeSession?.usagePct   ?? 0
   const weeklyPct     = activeSession?.weeklyPct  ?? 0
   const reset5hAt     = activeSession?.reset5hAt  ?? 0
@@ -1482,7 +1486,15 @@ export function App(): JSX.Element {
   const openRemote     = (id: number): void => setRemotePopupSessionId(id)
   const closeRemote    = (): void => setRemotePopupSessionId(null)
   const activateRemote = (id: number): void => {
+    const s = sessions.find(x => x.id === id)
+    if (!s || s.mode === 'codex' || s.mode === 'api') return  // native RC = claude.ai sessions only
+    // Connect Claude Code's native Remote Control + bring the terminal forward so
+    // the user sees its URL/QR + tell main to defer permissions to native (so
+    // mobile push can approve them). Mark the session so the island shows a badge.
     window.ccc?.injectConsoleText(id, '/remote-control')
+    window.ccc?.markSessionRemote(id)
+    window.ccc?.focusSession(id)
+    setSessions(prev => prev.map(x => x.id === id ? { ...x, remote: true } : x))
   }
 
   const wrapperClass = [
@@ -1522,6 +1534,8 @@ export function App(): JSX.Element {
         selectedModelId={activeModelId}
         isSwitchingModel={isSwitchingModel}
         contextPct={contextPct}
+        contextTokens={contextTokens}
+        contextWindowSize={contextWindowSize}
         usagePct={usagePct}
         weeklyPct={weeklyPct}
         reset5hAt={reset5hAt}

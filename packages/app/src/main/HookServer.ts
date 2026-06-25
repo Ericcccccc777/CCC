@@ -4,7 +4,6 @@ import { BrowserWindow, ipcMain } from 'electron'
 import { statSync, openSync, readSync, closeSync } from 'fs'
 import { IPC } from '../shared/ipc-channels'
 import type { SessionStateUpdate, ToolPermission, SessionMetricsUpdate } from '../shared/session-state'
-import type { MirrorServer } from './MirrorServer'
 
 interface Pending {
   res:       http.ServerResponse
@@ -32,7 +31,6 @@ export class HookServer {
   // Claude is still waiting for the user to make a choice). Cleared on Stop,
   // session teardown, and server shutdown.
   private terminalAwaiting = new Set<number>()
-  private mirror:         MirrorServer | null = null
   private win:            BrowserWindow | null = null
   private harnessAsk:     { res: http.ServerResponse; timer: ReturnType<typeof setTimeout> } | null = null
   private harnessSessions = new Set<number>()
@@ -43,6 +41,12 @@ export class HookServer {
   // Membership makes dispatch() auto-allow PreToolUse while leaving the
   // statusLine / Stop / Notification hooks intact.
   private fullAccessSessions = new Set<number>()
+  // Remote-control sessions: the user enabled Claude Code's native Remote
+  // Control to drive this session from a phone/web. For these, CCC must NOT
+  // pre-decide PreToolUse (its popup is desktop-only) — it passes through so
+  // Claude Code's own permission prompt fires and reaches the phone via mobile
+  // push ("Push when actions required").
+  private remoteSessions = new Set<number>()
   private readonly preToolUseTimeoutMs: number
   // ApiUsageManager subscribes to every parsed transcript line so it can
   // pull `usage.*` off API-mode assistant messages. Set via setTranscriptSink;
@@ -60,14 +64,8 @@ export class HookServer {
     this.preToolUseTimeoutMs = preToolUseTimeoutMs
   }
 
-  setMirrorServer(m: MirrorServer): void { this.mirror = m }
-
   setTranscriptSink(sink: (sessionId: number, parsed: Record<string, unknown>) => void): void {
     this.transcriptSink = sink
-  }
-
-  mirrorUrl(sessionId: number): string {
-    return this.mirror?.getMirrorUrl(sessionId) ?? ''
   }
 
   allowToolAlways(sessionId: number, tool: string): void {
@@ -94,6 +92,14 @@ export class HookServer {
 
   unregisterFullAccessSession(sessionId: number): void {
     this.fullAccessSessions.delete(sessionId)
+  }
+
+  registerRemoteSession(sessionId: number): void {
+    this.remoteSessions.add(sessionId)
+  }
+
+  unregisterRemoteSession(sessionId: number): void {
+    this.remoteSessions.delete(sessionId)
   }
 
   answerHarnessAsk(answer: string): void {
@@ -149,8 +155,7 @@ export class HookServer {
     this.terminalAwaiting.clear()
     this.harnessSessions.clear()
     this.fullAccessSessions.clear()
-    this.mirror?.stop()
-    this.mirror = null
+    this.remoteSessions.clear()
     this.server.close()
     ipcMain.removeAllListeners(IPC.HOOK_DECISION)
     ipcMain.removeAllListeners(IPC.ALLOW_TOOL_ALWAYS)
@@ -164,7 +169,7 @@ export class HookServer {
     this.transcripts.delete(sessionId)
     this.lastDoneAt.delete(sessionId)
     this.terminalAwaiting.delete(sessionId)
-    this.mirror?.unregisterSession(sessionId)
+    this.remoteSessions.delete(sessionId)
   }
 
   get serverPort(): number { return this.port }
@@ -227,8 +232,17 @@ export class HookServer {
     const modelObj = data['model'] as { id?: string; display_name?: string } | undefined
     const model    = modelObj?.display_name ?? modelObj?.id
 
-    const cw       = data['context_window'] as { used_percentage?: number } | undefined
+    const cw       = data['context_window'] as {
+      used_percentage?: number; context_window_size?: number
+      total_input_tokens?: number; total_output_tokens?: number
+    } | undefined
     const contextPct = typeof cw?.used_percentage === 'number' ? cw.used_percentage / 100 : undefined
+    const contextWindowSize = typeof cw?.context_window_size === 'number' ? cw.context_window_size : undefined
+    // Current context tokens = input (incl. cache) + output, per statusLine
+    // (as of CLI 2.1.132 these reflect current usage, not cumulative).
+    const inTok  = typeof cw?.total_input_tokens  === 'number' ? cw.total_input_tokens  : 0
+    const outTok = typeof cw?.total_output_tokens === 'number' ? cw.total_output_tokens : 0
+    const contextTokens = (inTok > 0 || outTok > 0) ? inTok + outTok : undefined
 
     const rl = data['rate_limits'] as Record<string, unknown> | undefined
     const fiveHour = rl?.['five_hour'] as Record<string, unknown> | undefined
@@ -274,14 +288,13 @@ export class HookServer {
     const reset7dAt = parseReset(sevenDay)
 
     const metrics: SessionMetricsUpdate = {
-      sessionId, model, contextPct, usagePct5h, usagePct7d, reset5hAt, reset7dAt,
+      sessionId, model, contextPct, contextTokens, contextWindowSize, usagePct5h, usagePct7d, reset5hAt, reset7dAt,
     }
     this.win?.webContents.send(IPC.SESSION_METRICS_UPDATED, metrics)
 
     const transcriptPath = typeof data['transcript_path'] === 'string' ? data['transcript_path'] : null
     if (transcriptPath && !this.transcripts.has(sessionId)) {
       this.startTranscriptWatch(sessionId, transcriptPath)
-      this.mirror?.registerSession(sessionId, transcriptPath)
     }
   }
 
@@ -416,6 +429,14 @@ export class HookServer {
       // permission prompts. Auto-allow without surfacing a popup.
       if (this.fullAccessSessions.has(p.sessionId)) {
         this.reply(res, { exitCode: 0 })
+        this.sendState({ sessionId: p.sessionId, state: 'streaming' })
+        return
+      }
+      // Remote-control sessions: defer to Claude Code's native permission prompt
+      // (passthrough = hook exits without a decision) so the request reaches the
+      // phone via mobile push instead of CCC's desktop-only popup.
+      if (this.remoteSessions.has(p.sessionId)) {
+        this.reply(res, { passthrough: true })
         this.sendState({ sessionId: p.sessionId, state: 'streaming' })
         return
       }

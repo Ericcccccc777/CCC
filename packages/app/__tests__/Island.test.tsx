@@ -124,6 +124,14 @@ class IslandTests {
           const { container } = render(<Island {...IslandTests.makeProps({ sessions: [], activeSessionId: null })} />)
           expect(container.querySelector('.ccc-logo')).not.toBeNull()
         })
+
+        it('context ring hover shows absolute tokens / window size when provided', () => {
+          const { container } = render(<Island {...IslandTests.makeProps({
+            contextTokens: 137000, contextWindowSize: 1_000_000, contextPct: 0.14,
+          })} />)
+          fireEvent.mouseEnter(container.querySelector('.ring-hover-target')!)
+          expect(screen.getByText(/137k \/ 1\.0M \(14%\)/)).toBeDefined()
+        })
       })
 
       describe('reasoning-effort row (model picker)', () => {
@@ -537,7 +545,7 @@ class IslandTests {
 
         it('renders the popup for the matching session id', () => {
           render(<Island {...IslandTests.makeProps({ remotePopupSessionId: 1 })} />)
-          expect(screen.getByText('test-session')).toBeDefined()
+          expect(screen.getByText(/test-session/)).toBeDefined()
         })
 
         it('does not override the App-owned remote popup window height', () => {
@@ -546,35 +554,35 @@ class IslandTests {
           expect(window.ccc.setMainHeight).not.toHaveBeenCalled()
         })
 
-        it('phone card invokes onActivateRemote when session is not busy', () => {
+        it('Enable Remote Control invokes onActivateRemote when session is not busy', () => {
           const onActivateRemote = vi.fn()
           // DEFAULT_SESSION.state = 'streaming' so we override to 'idle' first
           const idleSession = { ...DEFAULT_SESSION, state: 'idle' as const }
           render(<Island {...IslandTests.makeProps({
             sessions: [idleSession], remotePopupSessionId: 1, onActivateRemote,
           })} />)
-          fireEvent.click(screen.getByLabelText('Phone remote control via QR code'))
+          fireEvent.click(screen.getByText('Enable Remote Control'))
           expect(onActivateRemote).toHaveBeenCalledWith(1)
         })
 
-        it('phone card does NOT invoke onActivateRemote when session is streaming', () => {
+        it('does NOT invoke onActivateRemote when session is streaming', () => {
           const onActivateRemote = vi.fn()
           // DEFAULT_SESSION already has state: 'streaming'
           render(<Island {...IslandTests.makeProps({
             remotePopupSessionId: 1, onActivateRemote,
           })} />)
-          fireEvent.click(screen.getByLabelText('Phone remote control via QR code'))
+          fireEvent.click(screen.getByText('Enable Remote Control'))
           expect(onActivateRemote).not.toHaveBeenCalled()
           expect(screen.getByText(/currently responding/i)).toBeDefined()
         })
 
-        it('phone card does NOT invoke onActivateRemote when session is waiting', () => {
+        it('does NOT invoke onActivateRemote when session is waiting', () => {
           const onActivateRemote = vi.fn()
           const waitingSession = { ...DEFAULT_SESSION, state: 'waiting' as const }
           render(<Island {...IslandTests.makeProps({
             sessions: [waitingSession], remotePopupSessionId: 1, onActivateRemote,
           })} />)
-          fireEvent.click(screen.getByLabelText('Phone remote control via QR code'))
+          fireEvent.click(screen.getByText('Enable Remote Control'))
           expect(onActivateRemote).not.toHaveBeenCalled()
         })
       })

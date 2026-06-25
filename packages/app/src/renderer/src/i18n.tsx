@@ -131,15 +131,13 @@ export interface Translations {
   replyPlaceholder:   string
   // Remote control
   remoteControl:       string
-  remoteClaudeApp:     string
-  remoteClaudeAppHint: string
-  remoteScanCaption:   string
-  remoteCodeSent:      string
-  remoteMirror:        string
-  remoteMirrorHint:    string
-  remoteMirrorCaption: string
-  remoteMirrorNote:    string
-  remoteFetching:      string
+  remoteIntro:         string
+  remoteEnable:        string
+  remoteEnabledTitle:  string
+  remoteStep1:         string
+  remoteStep2:         string
+  remoteStep3:         string
+  remoteUnavailable:   string
   remoteBack:          string
   remoteDone:          string
   remoteClose:         string
@@ -326,15 +324,13 @@ const en: Translations = {
   enterKey:           'Enter ↵',
   replyPlaceholder:   'Type your reply…',
   remoteControl:       'Remote Control',
-  remoteClaudeApp:     'Claude App',
-  remoteClaudeAppHint: 'Open in Claude mobile',
-  remoteScanCaption:   'Scan with your phone to open Claude.',
-  remoteCodeSent:      'sent to the session.',
-  remoteMirror:        'Local Mirror',
-  remoteMirrorHint:    'Mirror on phone',
-  remoteMirrorCaption: 'Open in any browser on your local network.',
-  remoteMirrorNote:    'Full conversation history · auto-refreshes',
-  remoteFetching:      'Getting URL…',
+  remoteIntro:         'Drive this session from your phone or browser — chat and approve permissions while away from your computer, at home or out.',
+  remoteEnable:        'Enable Remote Control',
+  remoteEnabledTitle:  'Remote Control enabled',
+  remoteStep1:         'Scan the QR / open the URL shown in this session’s terminal window — or find the session in the Claude app or claude.ai/code.',
+  remoteStep2:         'To approve permission prompts from your phone: install the Claude app, then run /config and turn on “Push when actions required”.',
+  remoteStep3:         'Works at home and away — traffic routes through Anthropic over HTTPS, no LAN needed.',
+  remoteUnavailable:   'Remote Control needs a Claude (claude.ai) session. It’s not available for Codex or API-provider sessions.',
   remoteBack:          'Back',
   remoteDone:          'Done',
   remoteClose:         'Close',
@@ -519,15 +515,13 @@ const zh: Translations = {
   enterKey:           '确认 ↵',
   replyPlaceholder:   '输入回复…',
   remoteControl:       '远程控制',
-  remoteClaudeApp:     'Claude App',
-  remoteClaudeAppHint: '在手机上打开 Claude',
-  remoteScanCaption:   '用手机扫描以打开 Claude。',
-  remoteCodeSent:      '已发送到会话。',
-  remoteMirror:        '本地镜像',
-  remoteMirrorHint:    '在手机上查看对话',
-  remoteMirrorCaption: '在同一局域网内的任意浏览器中打开。',
-  remoteMirrorNote:    '完整对话历史 · 自动刷新',
-  remoteFetching:      '正在获取地址…',
+  remoteIntro:         '在手机或浏览器上驱动这个会话——离开电脑时(在家或在外)也能聊天、批准权限。',
+  remoteEnable:        '启用远程控制',
+  remoteEnabledTitle:  '已启用远程控制',
+  remoteStep1:         '扫描会话终端窗口里出现的二维码 / 打开那个网址,或在 Claude App、claude.ai/code 里找到这个会话。',
+  remoteStep2:         '想在手机上批准权限请求:安装 Claude App,然后运行 /config,打开 “Push when actions required”。',
+  remoteStep3:         '在家、在外都能用——流量经 Anthropic 走 HTTPS,不需要同一局域网。',
+  remoteUnavailable:   '远程控制需要 Claude(claude.ai)会话,Codex / API 会话不支持。',
   remoteBack:          '返回',
   remoteDone:          '完成',
   remoteClose:         '关闭',
@@ -712,15 +706,13 @@ const ko: Translations = {
   enterKey:           '확인 ↵',
   replyPlaceholder:   '답변을 입력하세요…',
   remoteControl:       '원격 제어',
-  remoteClaudeApp:     'Claude App',
-  remoteClaudeAppHint: 'Claude 모바일 열기',
-  remoteScanCaption:   '휴대폰으로 스캔하여 Claude를 여세요.',
-  remoteCodeSent:      '세션에 전송되었습니다.',
-  remoteMirror:        '로컬 미러',
-  remoteMirrorHint:    '휴대폰에서 대화 보기',
-  remoteMirrorCaption: '같은 Wi-Fi의 모든 브라우저에서 열 수 있습니다.',
-  remoteMirrorNote:    '전체 대화 내역 · 자동 새로고침',
-  remoteFetching:      'URL 가져오는 중…',
+  remoteIntro:         '휴대폰이나 브라우저에서 이 세션을 조작하세요 — 컴퓨터를 떠나 있어도(집이든 외출이든) 대화하고 권한을 승인할 수 있습니다.',
+  remoteEnable:        '원격 제어 활성화',
+  remoteEnabledTitle:  '원격 제어가 활성화됨',
+  remoteStep1:         '이 세션의 터미널 창에 표시되는 QR을 스캔하거나 URL을 여세요 — 또는 Claude 앱 / claude.ai/code에서 세션을 찾으세요.',
+  remoteStep2:         '휴대폰에서 권한 요청을 승인하려면: Claude 앱을 설치한 뒤 /config에서 “Push when actions required”를 켜세요.',
+  remoteStep3:         '집에서도 외부에서도 작동합니다 — 트래픽은 Anthropic을 통해 HTTPS로 전달되며 같은 네트워크가 필요 없습니다.',
+  remoteUnavailable:   '원격 제어에는 Claude(claude.ai) 세션이 필요합니다. Codex / API 세션에서는 사용할 수 없습니다.',
   remoteBack:          '뒤로',
   remoteDone:          '완료',
   remoteClose:         '닫기',

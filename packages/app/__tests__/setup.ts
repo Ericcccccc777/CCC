@@ -39,7 +39,7 @@ configure({ asyncUtilTimeout: 5000 })
   harnessLoad:             vi.fn().mockResolvedValue(null),
   harnessSave:             vi.fn().mockResolvedValue(undefined),
   harnessGenerate:         vi.fn().mockResolvedValue({ path: '' }),
-  getLocalMirrorUrl:       vi.fn().mockResolvedValue(''),
+  markSessionRemote:       vi.fn(),
   openAccessibilitySettings: vi.fn(),
   apiProviderList:         vi.fn().mockResolvedValue([]),
   apiProviderSave:         vi.fn().mockResolvedValue({ ok: true }),

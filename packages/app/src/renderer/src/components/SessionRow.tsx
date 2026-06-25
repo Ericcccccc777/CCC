@@ -116,6 +116,7 @@ export function SessionRow({
             title="Double-click to rename"
           >
             {session.name}
+            {session.remote && <span className="session-row-rc-badge" title="Remote Control">RC</span>}
           </div>
           {session.workspace && (
             <div

@@ -165,9 +165,9 @@ contextBridge.exposeInMainWorld('ccc', {
     return () => ipcRenderer.removeListener(IPC.MAGI_PROGRESS, h)
   },
 
-  // ── Remote mirror ──
-  getLocalMirrorUrl: (sessionId: number): Promise<string> =>
-    ipcRenderer.invoke(IPC.REMOTE_MIRROR_URL, sessionId),
+  // ── Remote control (Claude Code native) ──
+  markSessionRemote: (sessionId: number): void =>
+    ipcRenderer.send(IPC.MARK_SESSION_REMOTE, sessionId),
 
   openAccessibilitySettings: (): void =>
     ipcRenderer.send(IPC.OPEN_ACCESSIBILITY_SETTINGS),

@@ -75,10 +75,15 @@ const HOOK_SCRIPT_BODY =
       'let s="";r.on("data",c=>s+=c);' +
       'r.on("end",()=>{' +
         'if(ev==="pretooluse"){' +
-          'let ec=0;try{ec=JSON.parse(s).exitCode||0}catch(e){}' +
-          'const dec=ec===0?"allow":"deny";' +
-          'const out=JSON.stringify({hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:dec}});' +
-          'process.stdout.write(out,()=>process.exit(0))' +
+          'let r={};try{r=JSON.parse(s)}catch(e){}' +
+          // passthrough (remote-control sessions): emit NO decision so Claude
+          // Code shows its own native permission prompt (delivered to mobile).
+          'if(r.passthrough){process.exit(0)}' +
+          'else{' +
+            'const dec=(r.exitCode||0)===0?"allow":"deny";' +
+            'const out=JSON.stringify({hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:dec}});' +
+            'process.stdout.write(out,()=>process.exit(0))' +
+          '}' +
         '}' +
         'else process.exit(0)' +
       '})' +

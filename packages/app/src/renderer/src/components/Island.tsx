@@ -279,6 +279,8 @@ interface IslandProps {
   selectedEffort?:  ClaudeReasoningEffort
   isSwitchingModel: boolean
   contextPct:       number
+  contextTokens?:      number
+  contextWindowSize?:  number
   usagePct:         number
   weeklyPct:        number
   reset5hAt:        number
@@ -342,7 +344,7 @@ interface IslandProps {
 }
 
 export function Island({
-  state, model, selectedModelId, isSwitchingModel, contextPct, usagePct, weeklyPct,
+  state, model, selectedModelId, isSwitchingModel, contextPct, contextTokens, contextWindowSize, usagePct, weeklyPct,
   reset5hAt, reset7dAt, activeSessionMode, activeApiUsage,
   expanded, showModelPicker, notification, sessions, activeSessionId,
   remotePopupSessionId, showAccessibilityWarning, apiProviders, apiBalances, apiUsage,
@@ -523,7 +525,14 @@ export function Island({
             {activeSessionMode !== 'codex' && (
               <div
                 className="ring-hover-target"
-                onMouseEnter={() => setHoverHint(`${t.contextHover} ${Math.round(contextPct * 100)}%`)}
+                onMouseEnter={() => setHoverHint(
+                  // Show absolute "used / window (pct)" when statusLine gave us the
+                  // figures (window size is per-model: 200k / 1M for Opus); fall back
+                  // to percentage-only before the first API response / after /compact.
+                  contextTokens !== undefined && contextWindowSize
+                    ? `${t.contextHover} ${formatTokensCompact(contextTokens)} / ${formatTokensCompact(contextWindowSize)} (${Math.round(contextPct * 100)}%)`
+                    : `${t.contextHover} ${Math.round(contextPct * 100)}%`,
+                )}
                 onMouseLeave={() => setHoverHint(null)}
               >
                 <Ring pct={contextPct} size={22} label={`Context ${Math.round(contextPct * 100)}%`} />
@@ -850,8 +859,8 @@ export function Island({
       {remoteSession && (
         <RemoteControlPopup
           sessionName={remoteSession.name}
-          sessionId={remoteSession.id}
           busy={remoteBusy}
+          available={remoteSession.mode !== 'codex' && remoteSession.mode !== 'api'}
           onActivate={() => onActivateRemote(remoteSession.id)}
           onClose={onCloseRemote}
         />

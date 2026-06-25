@@ -57,6 +57,10 @@ export interface Session {
   name:                 string
   model:                string
   contextPct:           number
+  // Absolute context-window figures from statusLine (optional — older CLI builds
+  // or early in a session may omit them). Drives the "137k / 1M" hover.
+  contextTokens?:       number
+  contextWindowSize?:   number
   usagePct:             number
   weeklyPct:            number
   // Reset timestamps (ms epoch) for the 5h / 7d rate-limit windows;
@@ -85,6 +89,9 @@ export interface Session {
   apiModelId?:          string
   codexModelId?:        string
   codexMetrics?:        CodexSessionMetrics
+  // True once the user enabled Claude Code native Remote Control on this session
+  // (drives it from phone/web; CCC defers permissions to native). Shows an RC badge.
+  remote?:              boolean
   // Last reasoning-effort the user picked for this (anthropic) session via the
   // model picker's effort row. Optimistic — Claude Code doesn't echo the active
   // effort back, so this reflects the user's selection only (used to highlight
@@ -155,7 +162,7 @@ export interface CccBridge {
   magiUpdate:             (workspace: string, force?: boolean) => Promise<MagiOpResult>
   onMagiProgress:         (cb: (p: MagiProgress) => void) => () => void
   // Remote mirror
-  getLocalMirrorUrl:      (sessionId: number) => Promise<string>
+  markSessionRemote:      (sessionId: number) => void
   // macOS: open System Settings → Accessibility
   openAccessibilitySettings: () => void
   // API providers (DeepSeek + future Anthropic-compatible endpoints)

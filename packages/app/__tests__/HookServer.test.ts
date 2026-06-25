@@ -76,6 +76,43 @@ class HookServerTimeoutTests {
           req.end()
         })
 
+      const postHookBody = (body: object): Promise<string> =>
+        new Promise<string>((resolve, reject) => {
+          const json = JSON.stringify(body)
+          const req = http.request(
+            { hostname: '127.0.0.1', port, path: '/hook', method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(json) } },
+            (res: http.IncomingMessage) => {
+              let out = ''
+              res.on('data', c => { out += c })
+              res.on('end', () => resolve(out))
+            },
+          )
+          req.on('error', reject)
+          req.write(json)
+          req.end()
+        })
+
+      it('remote-control session passes PreToolUse through to native (no popup, passthrough body)', async () => {
+        server.registerRemoteSession(1)
+        const body = await postHookBody({
+          sessionId: 1, event: 'pretooluse', tool: 'Bash', toolInput: { command: 'ls' },
+        })
+        // response tells the hook to emit NO decision → Claude's native prompt fires
+        expect(JSON.parse(body)).toMatchObject({ passthrough: true })
+        // single streaming emit, never a waiting/permission popup
+        expect(sent).toEqual([{ sessionId: 1, state: 'streaming' }])
+      })
+
+      it('unregisterRemoteSession restores the permission popup', async () => {
+        server.registerRemoteSession(1)
+        server.unregisterRemoteSession(1)
+        await postHook({ sessionId: 1, event: 'pretooluse', tool: 'Bash', toolInput: { command: 'ls' } })
+        expect(sent).toHaveLength(2)
+        expect(sent[0].state).toBe('waiting')
+        expect(sent[0].permission).toBeDefined()
+      })
+
       it('AskUserQuestion timeout keeps state=waiting (icon stays `?`, popup clears, no flip to streaming)', async () => {
         await postHook({
           sessionId: 1,

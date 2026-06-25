@@ -354,9 +354,13 @@ Remove-Item '${safePath}' -ErrorAction SilentlyContinue
         `$d=try{$stdin|ConvertFrom-Json}catch{[PSCustomObject]@{}}; ` +
         `$tool=if($d.tool_name){[string]$d.tool_name}else{'unknown'}; ` +
         `$b=(@{sessionId=${sessionId};event='pretooluse';tool=$tool;toolInput=$d.tool_input}|ConvertTo-Json -Compress -Depth 6); ` +
-        `$code=0; ` +
+        `$r=$null; ` +
         `try{$r=Invoke-RestMethod -Uri '${url}' -Method POST -Body $b ` +
-        `-ContentType 'application/json' -TimeoutSec 60; $code=[int]$r.exitCode}catch{}; ` +
+        `-ContentType 'application/json' -TimeoutSec 60}catch{}; ` +
+        // passthrough (remote-control sessions): emit NO decision so Claude Code
+        // shows its own native permission prompt (delivered to mobile).
+        `if($r -and $r.passthrough){exit 0}; ` +
+        `$code=if($r){[int]$r.exitCode}else{0}; ` +
         `$decision=if($code -eq 0){'allow'}else{'deny'}; ` +
         `$out=(@{hookSpecificOutput=@{hookEventName='PreToolUse';permissionDecision=$decision}}|ConvertTo-Json -Compress); ` +
         `[Console]::Out.Write($out); ` +
