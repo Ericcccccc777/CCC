@@ -11,8 +11,10 @@ interface MagiBridge {
   magiCheckEnv:       ReturnType<typeof vi.fn>
   magiInstallEnv:     ReturnType<typeof vi.fn>
   magiInstall:        ReturnType<typeof vi.fn>
+  magiUpdate:         ReturnType<typeof vi.fn>
   onMagiProgress:     ReturnType<typeof vi.fn>
   closeHarnessWindow: ReturnType<typeof vi.fn>
+  openDashboard:      ReturnType<typeof vi.fn>
 }
 
 const env = (id: MagiEnvItem['id'], ok: boolean, detail = ''): MagiEnvItem =>
@@ -28,8 +30,10 @@ function installBridge(opts: {
     magiCheckEnv:       vi.fn().mockResolvedValue({ items, allOk: items.every(i => i.ok) }),
     magiInstallEnv:     vi.fn().mockResolvedValue({ ok: true }),
     magiInstall:        vi.fn().mockResolvedValue({ ok: true }),
+    magiUpdate:         vi.fn().mockResolvedValue({ ok: true }),
     onMagiProgress:     vi.fn().mockReturnValue(() => {}),
     closeHarnessWindow: vi.fn(),
+    openDashboard:      vi.fn(),
   }
   ;(globalThis as unknown as { window: { ccc: MagiBridge } }).window.ccc = m
   return m
@@ -45,12 +49,15 @@ describe('HarnessWizard / CCC-MAGI panel', () => {
     await waitFor(() => expect(bridge.magiCheckInstalled).toHaveBeenCalled())
   })
 
-  it('already-installed workspace skips to the maintaining state', async () => {
+  it('already-installed workspace opens the console directly and closes the wizard (no maintaining page)', async () => {
     bridge = installBridge({ installed: true })
     render(<HarnessWizard workspace="/tmp/demo" />)
-    expect(await screen.findByText('CCC-MAGI is already installed here.')).toBeDefined()
+    await waitFor(() => expect(bridge.openDashboard).toHaveBeenCalledWith('/tmp/demo'))
+    expect(bridge.closeHarnessWindow).toHaveBeenCalled()
     // env detection is skipped when already installed
     expect(bridge.magiCheckEnv).not.toHaveBeenCalled()
+    // the old "already installed" interstitial is gone
+    expect(screen.queryByText('CCC-MAGI is already installed here.')).toBeNull()
   })
 
   it('shows an Install button next to a failing environment item', async () => {
@@ -74,11 +81,21 @@ describe('HarnessWizard / CCC-MAGI panel', () => {
     expect(await screen.findByText('Install CCC-MAGI')).toBeDefined()
   })
 
-  it('all env passing shows Install CCC-MAGI; clicking it runs the npx install', async () => {
+  it('all env passing shows Install CCC-MAGI; clicking installs then opens the console + closes', async () => {
     render(<HarnessWizard workspace="/tmp/demo" />)
     fireEvent.click(await screen.findByText('Install CCC-MAGI'))
     await waitFor(() => expect(bridge.magiInstall).toHaveBeenCalledWith('/tmp/demo'))
-    expect(await screen.findByText('CCC-MAGI is now maintaining your project.')).toBeDefined()
+    // install success → straight to the console; no "maintaining" interstitial
+    await waitFor(() => expect(bridge.openDashboard).toHaveBeenCalledWith('/tmp/demo'))
+    expect(bridge.closeHarnessWindow).toHaveBeenCalled()
+    expect(screen.queryByText('CCC-MAGI is now maintaining your project.')).toBeNull()
+  })
+
+  it('does NOT show an Update button in the wizard (update lives in the console now)', async () => {
+    bridge = installBridge({ items: [env('git', true), env('node', true), env('jq', false, 'not found')] })
+    render(<HarnessWizard workspace="/tmp/demo" />)
+    await screen.findByText('jq')
+    expect(screen.queryByText('Update CCC-MAGI')).toBeNull()
   })
 
   it('close button calls closeHarnessWindow', async () => {

@@ -105,6 +105,36 @@ class HookServerTimeoutTests {
         expect(sent[1]).toEqual({ sessionId: 1, state: 'streaming' })
       })
 
+      it('full-access (danger mode) session auto-allows PreToolUse with no popup', async () => {
+        server.registerFullAccessSession(1)
+        await postHook({
+          sessionId: 1,
+          event:     'pretooluse',
+          tool:      'Bash',
+          toolInput: { command: 'rm -rf build' },
+        })
+        // Single emit: streaming, no `waiting`/permission popup ever shown.
+        expect(sent).toHaveLength(1)
+        expect(sent[0]).toEqual({ sessionId: 1, state: 'streaming' })
+        expect(sent[0].permission).toBeUndefined()
+      })
+
+      it('unregisterFullAccessSession restores the permission popup', async () => {
+        server.registerFullAccessSession(1)
+        server.unregisterFullAccessSession(1)
+        await postHook({
+          sessionId: 1,
+          event:     'pretooluse',
+          tool:      'Bash',
+          toolInput: { command: 'ls' },
+        })
+        // Back to normal: popup opens, then timeout flips to streaming.
+        expect(sent).toHaveLength(2)
+        expect(sent[0].state).toBe('waiting')
+        expect(sent[0].permission).toBeDefined()
+        expect(sent[1]).toEqual({ sessionId: 1, state: 'streaming' })
+      })
+
       it('Stop event after AskUserQuestion timeout flips to done and clears terminal-awaiting suppression', async () => {
         await postHook({
           sessionId: 1,

@@ -83,6 +83,7 @@ export interface Translations {
   codexEffortMedium:     string
   codexEffortHigh:       string
   codexEffortXhigh:      string
+  effortMax:             string
   codexCliDetectFailed:  string
   newSessionEngineTitle: string
   newSessionEngineHint:  string
@@ -286,6 +287,7 @@ const en: Translations = {
   codexEffortMedium:     'Medium',
   codexEffortHigh:       'High',
   codexEffortXhigh:      'Extra High',
+  effortMax:             'Max',
   codexCliDetectFailed:  'Detection failed',
   newSessionEngineTitle: 'New Session',
   newSessionEngineHint:  'Choose which CLI to use.',
@@ -478,6 +480,7 @@ const zh: Translations = {
   codexEffortMedium:     '中',
   codexEffortHigh:       '高',
   codexEffortXhigh:      '超高',
+  effortMax:             '最高',
   codexCliDetectFailed:  '检测失败',
   newSessionEngineTitle: '新建会话',
   newSessionEngineHint:  '选择要使用的 CLI。',
@@ -670,6 +673,7 @@ const ko: Translations = {
   codexEffortMedium:     '중간',
   codexEffortHigh:       '높음',
   codexEffortXhigh:      '매우 높음',
+  effortMax:             '최대',
   codexCliDetectFailed:  '감지 실패',
   newSessionEngineTitle: '새 세션',
   newSessionEngineHint:  '사용할 CLI를 선택하세요.',

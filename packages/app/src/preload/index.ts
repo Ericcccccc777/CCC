@@ -16,6 +16,7 @@ import type {
 } from '../shared/api-provider'
 import type { ApiBalanceSnapshot, ApiUsageSnapshot } from '../shared/api-usage'
 import type { CodexReasoningEffort } from '../shared/codex-cli'
+import type { ClaudeReasoningEffort } from '../shared/claude-cli'
 import type {
   MagiEnvId, MagiEnvReport, MagiInstalledResult, MagiOpResult, MagiProgress,
 } from '../shared/magi'
@@ -64,6 +65,9 @@ contextBridge.exposeInMainWorld('ccc', {
 
   switchSessionModel: (sessionId: number, alias: string): void =>
     ipcRenderer.send(IPC.SWITCH_SESSION_MODEL, sessionId, alias),
+
+  switchSessionEffort: (sessionId: number, effort: ClaudeReasoningEffort): void =>
+    ipcRenderer.send(IPC.SWITCH_SESSION_EFFORT, sessionId, effort),
 
   injectConsoleText: (sessionId: number, text: string): void =>
     ipcRenderer.send(IPC.INJECT_CONSOLE_TEXT, sessionId, text),
@@ -117,6 +121,28 @@ contextBridge.exposeInMainWorld('ccc', {
   closeHarnessWindow: (): void =>
     ipcRenderer.send(IPC.HARNESS_CLOSE_WINDOW),
 
+  // ── Harness visualization dashboard ──
+  openDashboard: (workspace: string): void =>
+    ipcRenderer.send(IPC.DASHBOARD_OPEN_WINDOW, workspace),
+
+  harnessRead: (workspace: string, relPath: string): Promise<string | null> =>
+    ipcRenderer.invoke(IPC.HARNESS_READ, workspace, relPath),
+
+  harnessSummary: (workspace: string): Promise<import('../shared/harness').HarnessSummary> =>
+    ipcRenderer.invoke(IPC.HARNESS_SUMMARY, workspace),
+
+  harnessListSessions: (workspace: string): Promise<import('../shared/harness').SessionListItem[]> =>
+    ipcRenderer.invoke(IPC.HARNESS_LIST_SESSIONS, workspace),
+
+  harnessReadSession: (workspace: string, sessionId: string): Promise<import('../shared/harness').TranscriptMessage[]> =>
+    ipcRenderer.invoke(IPC.HARNESS_READ_SESSION, workspace, sessionId),
+
+  harnessStats: (workspace: string): Promise<import('../shared/harness').ProjectStats> =>
+    ipcRenderer.invoke(IPC.HARNESS_STATS, workspace),
+
+  resumeSession: (workspace: string, sessionId: string): void =>
+    ipcRenderer.send(IPC.RESUME_SESSION, workspace, sessionId),
+
   // ── CCC-MAGI install flow ──
   magiCheckInstalled: (workspace: string): Promise<MagiInstalledResult> =>
     ipcRenderer.invoke(IPC.MAGI_CHECK_INSTALLED, workspace),
@@ -129,6 +155,9 @@ contextBridge.exposeInMainWorld('ccc', {
 
   magiInstall: (workspace: string): Promise<MagiOpResult> =>
     ipcRenderer.invoke(IPC.MAGI_INSTALL, workspace),
+
+  magiUpdate: (workspace: string, force?: boolean): Promise<MagiOpResult> =>
+    ipcRenderer.invoke(IPC.MAGI_UPDATE, workspace, force),
 
   onMagiProgress: (cb: (p: MagiProgress) => void): (() => void) => {
     const h = (_e: IpcRendererEvent, p: MagiProgress): void => cb(p)

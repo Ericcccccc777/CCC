@@ -18,6 +18,7 @@ import type {
 } from '../../shared/api-provider'
 import type { ApiBalanceSnapshot, ApiUsageSnapshot } from '../../shared/api-usage'
 import type { CodexReasoningEffort } from '../../shared/codex-cli'
+import type { ClaudeReasoningEffort } from '../../shared/claude-cli'
 
 export interface HarnessGenerateResult {
   path:          string
@@ -84,6 +85,11 @@ export interface Session {
   apiModelId?:          string
   codexModelId?:        string
   codexMetrics?:        CodexSessionMetrics
+  // Last reasoning-effort the user picked for this (anthropic) session via the
+  // model picker's effort row. Optimistic — Claude Code doesn't echo the active
+  // effort back, so this reflects the user's selection only (used to highlight
+  // the chosen chip). Undefined until they pick one.
+  reasoningEffort?:     ClaudeReasoningEffort
 }
 
 export interface CodexSessionMetrics {
@@ -96,6 +102,7 @@ export interface CodexSessionMetrics {
 }
 
 export type { CodexReasoningEffort }
+export type { ClaudeReasoningEffort }
 
 export interface ModelInfo {
   readonly id:          string
@@ -118,6 +125,7 @@ export interface CccBridge {
   sendHookDecision:       (hookKey: string, exitCode: number) => void
   allowToolAlways:        (sessionId: number, tool: string) => void
   switchSessionModel:     (sessionId: number, alias: string) => void
+  switchSessionEffort:    (sessionId: number, effort: ClaudeReasoningEffort) => void
   injectConsoleText:      (sessionId: number, text: string) => void
   focusSession:           (sessionId: number) => void
   onSessionRestored:      (cb: (data: SessionRestored) => void) => () => void
@@ -131,11 +139,20 @@ export interface CccBridge {
   harnessLoad:            (workspace: string) => Promise<HarnessConfig | null>
   harnessSave:            (workspace: string, config: HarnessConfig) => Promise<void>
   harnessGenerate:        (workspace: string, config: HarnessConfig) => Promise<HarnessGenerateResult>
+  // Harness visualization dashboard (read-only project-state viewer)
+  openDashboard:          (workspace: string) => void
+  harnessRead:            (workspace: string, relPath: string) => Promise<string | null>
+  harnessSummary:         (workspace: string) => Promise<import('../../shared/harness').HarnessSummary>
+  harnessListSessions:    (workspace: string) => Promise<import('../../shared/harness').SessionListItem[]>
+  harnessReadSession:     (workspace: string, sessionId: string) => Promise<import('../../shared/harness').TranscriptMessage[]>
+  harnessStats:           (workspace: string) => Promise<import('../../shared/harness').ProjectStats>
+  resumeSession:          (workspace: string, sessionId: string) => void
   // CCC-MAGI install flow
   magiCheckInstalled:     (workspace: string) => Promise<MagiInstalledResult>
   magiCheckEnv:           () => Promise<MagiEnvReport>
   magiInstallEnv:         (id: MagiEnvId) => Promise<MagiOpResult>
   magiInstall:            (workspace: string) => Promise<MagiOpResult>
+  magiUpdate:             (workspace: string, force?: boolean) => Promise<MagiOpResult>
   onMagiProgress:         (cb: (p: MagiProgress) => void) => () => void
   // Remote mirror
   getLocalMirrorUrl:      (sessionId: number) => Promise<string>

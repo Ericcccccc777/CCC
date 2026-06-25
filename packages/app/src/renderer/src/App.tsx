@@ -5,7 +5,7 @@ import { ApiSwitchPopup } from './components/ApiSwitchPopup'
 import { CodexSwitchPopup } from './components/CodexSwitchPopup'
 import { NewSessionEnginePopup } from './components/NewSessionEnginePopup'
 import { QuitConfirmPopup } from './components/QuitConfirmPopup'
-import type { AppState, OverlayMode, Session, ActionType, SessionNotification, SessionStateUpdate, SessionMetricsUpdate, SessionRestored, CodexReasoningEffort } from './types'
+import type { AppState, OverlayMode, Session, ActionType, SessionNotification, SessionStateUpdate, SessionMetricsUpdate, SessionRestored, CodexReasoningEffort, ClaudeReasoningEffort } from './types'
 
 // --- Overlay layout constants ----------------------------------------------
 // All overlay-mode bounds are derived from these. Single source so the snap
@@ -1332,6 +1332,17 @@ export function App(): JSX.Element {
     }
   }
 
+  // Inject /effort <level> into the running Claude Code terminal (anthropic
+  // sessions only). Claude Code accepts the level inline, so this is the same
+  // one-shot path as /model. No statusline echoes the active effort back, so we
+  // optimistically record the pick on the session to highlight the chosen chip.
+  const selectEffort = (effort: ClaudeReasoningEffort): void => {
+    if (!activeSession || activeSession.mode !== 'anthropic') return
+    window.ccc?.switchSessionEffort(activeSession.id, effort)
+    setSessions(prev => prev.map(s =>
+      s.id === activeSession.id ? { ...s, reasoningEffort: effort } : s))
+  }
+
   // User clicked a custom-API model chip in the picker → open the switch
   // popup. We re-fetch providers first so a user who added a key in Settings
   // since last mount still gets the right modelId.
@@ -1460,7 +1471,12 @@ export function App(): JSX.Element {
 
   const openHarness = (id: number): void => {
     const s = sessions.find(x => x.id === id)
-    if (s) window.ccc?.openHarnessWindow(s.workspace)
+    if (!s) return
+    window.ccc?.openHarnessWindow(s.workspace)
+    // The console/wizard opens in its own window — collapse the expanded island
+    // back to the pill so it's not left hanging open behind the new page.
+    setExpanded(false)
+    setShowModelPicker(false)
   }
 
   const openRemote     = (id: number): void => setRemotePopupSessionId(id)
@@ -1565,6 +1581,8 @@ export function App(): JSX.Element {
         }}
         onSelectModel={selectModel}
         onSelectApiModel={(providerId, modelId) => void requestApiSwitch(providerId, modelId)}
+        selectedEffort={activeSession?.reasoningEffort}
+        onSelectEffort={selectEffort}
         codexModels={codexModels}
         onSelectCodexModel={requestCodexSwitch}
         onAddSession={addSession}

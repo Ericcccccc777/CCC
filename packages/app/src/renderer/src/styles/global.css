@@ -722,6 +722,55 @@ body {
   border-color: rgba(255,255,255,0.14);
 }
 
+/* Reasoning-effort row under the Claude model chips. Orange theme matches the
+   Claude model chips (Codex uses its own green effort grid elsewhere). */
+.effort-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 7px;
+}
+
+.effort-row__label {
+  flex: 0 0 auto;
+  font-size: 9.5px;
+  font-weight: 600;
+  color: rgba(255,255,255,0.40);
+  white-space: nowrap;
+}
+
+.effort-row__chips {
+  display: flex;
+  flex: 1;
+  gap: 4px;
+}
+
+.effort-chip {
+  flex: 1;
+  min-width: 0;
+  height: 24px;
+  border-radius: 7px;
+  border: 1px solid rgba(255,255,255,0.08);
+  background: rgba(255,255,255,0.03);
+  color: rgba(255,255,255,0.70);
+  font-size: 10px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.effort-chip:hover:not(.effort-chip--selected) {
+  background: rgba(204,155,122,0.10);
+  border-color: rgba(204,155,122,0.30);
+  color: rgba(255,255,255,0.90);
+}
+
+.effort-chip--selected {
+  background: rgba(204,155,122,0.16);
+  border-color: rgba(204,155,122,0.45);
+  color: rgba(232,205,184,0.98);
+}
+
 .model-chip--selected {
   background: rgba(204,155,122,0.12);
   border-color: rgba(204,155,122,0.38);
@@ -2185,6 +2234,13 @@ body {
   color: rgba(255,255,255,0.7);
   line-height: 1.5;
   white-space: pre-wrap;
+}
+
+.magi-error-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 6px;
 }
 
 .magi-log {

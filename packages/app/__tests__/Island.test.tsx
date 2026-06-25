@@ -126,6 +126,65 @@ class IslandTests {
         })
       })
 
+      describe('reasoning-effort row (model picker)', () => {
+        it('renders effort chips gated to the model — Opus 4.8 shows the full set incl. xhigh + max', () => {
+          render(<Island {...IslandTests.makeProps({
+            showModelPicker: true,
+            selectedModelId: 'claude-opus-4-8',
+          })} />)
+          expect(screen.getByText('Reasoning effort')).toBeDefined()
+          expect(screen.getByRole('radio', { name: 'Reasoning effort — Extra High' })).toBeDefined()
+          expect(screen.getByRole('radio', { name: 'Reasoning effort — Max' })).toBeDefined()
+        })
+
+        it('hides xhigh for Sonnet 4.6 but still offers max', () => {
+          render(<Island {...IslandTests.makeProps({
+            showModelPicker: true,
+            selectedModelId: 'claude-sonnet-4-6',
+          })} />)
+          expect(screen.queryByRole('radio', { name: 'Reasoning effort — Extra High' })).toBeNull()
+          expect(screen.getByRole('radio', { name: 'Reasoning effort — Max' })).toBeDefined()
+        })
+
+        it('hides the whole effort row for Haiku (no effort support)', () => {
+          render(<Island {...IslandTests.makeProps({
+            showModelPicker: true,
+            selectedModelId: 'claude-haiku-4-5-20251001',
+          })} />)
+          expect(screen.queryByText('Reasoning effort')).toBeNull()
+        })
+
+        it('does NOT render the effort row for API-mode sessions', () => {
+          render(<Island {...IslandTests.makeProps({
+            showModelPicker:   true,
+            activeSessionMode: 'api',
+            selectedModelId:   'claude-opus-4-8',
+          })} />)
+          expect(screen.queryByText('Reasoning effort')).toBeNull()
+        })
+
+        it('calls onSelectEffort with the picked level', () => {
+          const onSelectEffort = vi.fn()
+          render(<Island {...IslandTests.makeProps({
+            showModelPicker: true,
+            selectedModelId: 'claude-opus-4-8',
+            onSelectEffort,
+          })} />)
+          fireEvent.click(screen.getByRole('radio', { name: 'Reasoning effort — Max' }))
+          expect(onSelectEffort).toHaveBeenCalledWith('max')
+        })
+
+        it('highlights the currently-selected effort chip', () => {
+          render(<Island {...IslandTests.makeProps({
+            showModelPicker: true,
+            selectedModelId: 'claude-opus-4-8',
+            selectedEffort:  'xhigh',
+          })} />)
+          expect(screen.getByRole('radio', { name: 'Reasoning effort — Extra High' }).getAttribute('aria-checked')).toBe('true')
+          expect(screen.getByRole('radio', { name: 'Reasoning effort — High' }).getAttribute('aria-checked')).toBe('false')
+        })
+      })
+
       describe('expanded panel', () => {
         it('shows New Session button when expanded', () => {
           render(<Island {...IslandTests.makeProps({ expanded: true })} />)

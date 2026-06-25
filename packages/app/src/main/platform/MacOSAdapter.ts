@@ -398,7 +398,7 @@ export class MacOSAdapter implements PlatformAdapter {
   }
 
   launchInteractive(opts: LaunchInteractiveOptions): LaunchResult {
-    const { workspace, modelId, sessionId, port, env, skipPermissions } = opts
+    const { workspace, modelId, sessionId, port, env, skipPermissions, resumeSessionId } = opts
 
     const inner   = join(this.tmp, `ccc-inner-${sessionId}.sh`)
     const watcher = join(this.tmp, `ccc-watcher-${sessionId}.sh`)
@@ -406,6 +406,10 @@ export class MacOSAdapter implements PlatformAdapter {
 
     const modelArg = modelId ? ` --model ${modelId}` : ''
     const permArg  = skipPermissions ? ' --dangerously-skip-permissions' : ''
+    // Resume restores the session's own model, so --model is omitted on resume.
+    const claudeCmd = resumeSessionId
+      ? `exec claude --resume '${shq(resumeSessionId)}'${permArg}`
+      : `exec claude${modelArg}${permArg}`
 
     const extraEnvLines = buildShellEnvExports(env)
 
@@ -418,7 +422,7 @@ export class MacOSAdapter implements PlatformAdapter {
       `export CCC_SESSION_ID='${sessionId}'`,
       ...extraEnvLines,
       `echo $$ > '${shq(pidFile)}'`,
-      `exec claude${modelArg}${permArg}`,
+      claudeCmd,
       '',
     ].join('\n'), { mode: 0o755 })
 

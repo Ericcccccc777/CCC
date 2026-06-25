@@ -20,6 +20,12 @@ export interface LaunchInteractiveOptions {
   // rather than `child_process.spawn`'s `env` option, so the visible
   // Terminal / PowerShell window inherits them.
   readonly env?:                 Readonly<Record<string, string>>
+  // When set, resume an existing Claude session (`claude --resume <id>`) instead
+  // of starting fresh. modelId is ignored — the resumed session restores its own
+  // model. The id is a Claude session uuid (the ~/.claude/projects/<enc>/<id>.jsonl
+  // filename). Callers MUST validate it against a safe charset (it's interpolated
+  // into the launch script).
+  readonly resumeSessionId?:     string
 }
 
 export interface LaunchHeadlessOptions {

@@ -74,7 +74,7 @@ export class WindowsAdapter implements PlatformAdapter {
   }
 
   launchInteractive(opts: LaunchInteractiveOptions): LaunchResult {
-    const { workspace, modelId, sessionId, port, env, skipPermissions } = opts
+    const { workspace, modelId, sessionId, port, env, skipPermissions, resumeSessionId } = opts
 
     const inner   = join(this.tmp, `ccc-inner-${sessionId}.ps1`)
     const outer   = join(this.tmp, `ccc-outer-${sessionId}.ps1`)
@@ -85,15 +85,21 @@ export class WindowsAdapter implements PlatformAdapter {
     const escPid   = pidFile.replace(/'/g, "''")
     const modelArg = modelId ? ` --model ${modelId}` : ''
     const permArg  = skipPermissions ? ' --dangerously-skip-permissions' : ''
+    // Resume restores the session's own model, so --model is omitted on resume.
+    const claudeLine = resumeSessionId
+      ? `claude --resume ${resumeSessionId.replace(/'/g, "''")}${permArg}`
+      : `claude${modelArg}${permArg}`
 
     const extraEnvLines = buildPowerShellEnvLines(env)
 
     writeFileSync(inner, [
+      `$env:CCC_OWNER      = 'Claude-Code-Controller'`,
+      `$env:CCC_ENGINE     = 'claude'`,
       `$env:CCC_PORT       = '${port}'`,
       `$env:CCC_SESSION_ID = '${sessionId}'`,
       ...extraEnvLines,
       `Set-Location '${escWs}'`,
-      `claude${modelArg}${permArg}`,
+      claudeLine,
     ].join('\n'), 'utf8')
 
     writeFileSync(outer, [

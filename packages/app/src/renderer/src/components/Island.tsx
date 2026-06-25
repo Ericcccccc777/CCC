@@ -13,6 +13,8 @@ import { RemoteControlPopup } from './RemoteControlPopup'
 import { ApiProvidersPanel } from './ApiProvidersPanel'
 import { CodexCliPanel } from './CodexCliPanel'
 import type { CodexModel } from '../../../shared/codex-cli'
+import { claudeEffortsForModel } from '../../../shared/claude-cli'
+import type { ClaudeReasoningEffort } from '../types'
 
 // Note on switchAlias: Claude Code's `/model <alias>` accepts aliases for
 // each picker entry. As of CLI 2.1.x the "Default (recommended)" picker
@@ -41,11 +43,19 @@ interface ModelPickerStripProps {
   onSelectApi:     (providerId: 'deepseek', modelId: string) => void
   codexModels:     readonly CodexModel[]
   onSelectCodex:   (modelId: string) => void
+  selectedEffort?: ClaudeReasoningEffort
+  onSelectEffort?: (effort: ClaudeReasoningEffort) => void
 }
 
-function ModelPickerStrip({ selectedModelId, onSelect, variant, mode, apiProviders, onSelectApi, codexModels, onSelectCodex }: ModelPickerStripProps): JSX.Element {
+function ModelPickerStrip({ selectedModelId, onSelect, variant, mode, apiProviders, onSelectApi, codexModels, onSelectCodex, selectedEffort, onSelectEffort }: ModelPickerStripProps): JSX.Element {
   const t = useLang()
   const hasVerifiedDeepSeekKey = apiProviders.some(p => p.id === 'deepseek' && p.hasKey && p.verified)
+  const effortLabel = (eff: ClaudeReasoningEffort): string =>
+    eff === 'low'    ? t.codexEffortLow :
+    eff === 'medium' ? t.codexEffortMedium :
+    eff === 'high'   ? t.codexEffortHigh :
+    eff === 'xhigh'  ? t.codexEffortXhigh :
+    t.effortMax
   if (mode === 'codex') {
     return (
       <div
@@ -89,6 +99,33 @@ function ModelPickerStrip({ selectedModelId, onSelect, variant, mode, apiProvide
           </button>
         ))}
       </div>
+
+      {/* Reasoning-effort row — Claude only (not API/DeepSeek). Levels are
+         gated to what the selected model supports (Haiku → none, so the row
+         hides; Sonnet → no xhigh). Clicking injects `/effort <level>`. */}
+      {mode === 'anthropic' && (() => {
+        const efforts = claudeEffortsForModel(selectedModelId)
+        if (efforts.length === 0) return null
+        return (
+          <div className="effort-row" role="radiogroup" aria-label={t.codexReasoningEffort}>
+            <span className="effort-row__label">{t.codexReasoningEffort}</span>
+            <div className="effort-row__chips">
+              {efforts.map(eff => (
+                <button
+                  key={eff}
+                  className={`effort-chip${selectedEffort === eff ? ' effort-chip--selected' : ''}`}
+                  role="radio"
+                  aria-checked={selectedEffort === eff}
+                  aria-label={`${t.codexReasoningEffort} — ${effortLabel(eff)}`}
+                  onClick={() => onSelectEffort?.(eff)}
+                >
+                  {effortLabel(eff)}
+                </button>
+              ))}
+            </div>
+          </div>
+        )
+      })()}
 
       {hasVerifiedDeepSeekKey && (
         <>
@@ -239,6 +276,7 @@ interface IslandProps {
   state:            AppState
   model:            string
   selectedModelId:  string
+  selectedEffort?:  ClaudeReasoningEffort
   isSwitchingModel: boolean
   contextPct:       number
   usagePct:         number
@@ -286,6 +324,7 @@ interface IslandProps {
   onSelectApiModel:   (providerId: 'deepseek', modelId: string) => void
   codexModels:         readonly CodexModel[]
   onSelectCodexModel:  (modelId: string) => void
+  onSelectEffort?:     (effort: ClaudeReasoningEffort) => void
   onAddSession:     () => void | Promise<void>
   onRemoveSession:  (id: number) => void
   onRenameSession:  (id: number, name: string) => void
@@ -311,7 +350,8 @@ export function Island({
   showSettings: showSettingsProp, onToggleSettings,
   onPillPointerDown, onStripPointerEnter, onOverlayPointerLeave,
   onToggleExpand, onToggleModelPicker, onSelectModel, onSelectApiModel,
-  codexModels, onSelectCodexModel,
+  codexModels, onSelectCodexModel, onSelectEffort,
+  selectedEffort,
   onAddSession, onRemoveSession, onRenameSession, onSelectSession, onOpenHarness,
   onOpenRemote, onCloseRemote, onActivateRemote, onAction, onQuit,
   onDismissNotif, onHookDecision, onAllowAlways, onReplyAndAllow,
@@ -345,6 +385,15 @@ export function Island({
   useEffect(() => {
     if (!expanded && showSettingsProp === undefined) setShowSettingsLocal(false)
   }, [expanded, showSettingsProp])
+
+  // Clear any hover-hint when the panel collapses. A hovered SessionRow button
+  // (CCC-Harness / remote) unmounts on collapse before its mouseLeave fires —
+  // without this, its label stays stuck in the pill centre (instead of the
+  // model name) until the user hovers something else. Triggered e.g. when
+  // clicking CCC-Harness, which collapses the island.
+  useEffect(() => {
+    if (!expanded) setHoverHint(null)
+  }, [expanded])
   // Window-height management lives in App.tsx now (single source so overlay
   // modes can size the strip / circle without fighting this effect). The
   // previous per-component setMainHeight call was removed when the overlay
@@ -528,6 +577,8 @@ export function Island({
             onSelectApi={handleApiPickerSelect}
             codexModels={codexModels}
             onSelectCodex={onSelectCodexModel}
+            selectedEffort={selectedEffort}
+            onSelectEffort={onSelectEffort}
           />
         )}
 
@@ -557,6 +608,8 @@ export function Island({
                 onSelectApi={handleApiPickerSelect}
                 codexModels={codexModels}
                 onSelectCodex={onSelectCodexModel}
+                selectedEffort={selectedEffort}
+                onSelectEffort={onSelectEffort}
               />
             )}
 

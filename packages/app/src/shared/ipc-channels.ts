@@ -9,6 +9,7 @@ export const IPC = {
   HOOK_DECISION:           'hook-decision',
   ALLOW_TOOL_ALWAYS:       'ccc:allow-tool-always',
   SWITCH_SESSION_MODEL:    'ccc:switch-session-model',
+  SWITCH_SESSION_EFFORT:   'ccc:switch-session-effort',
   INJECT_CONSOLE_TEXT:     'ccc:inject-console-text',
   SESSION_FOCUS:           'ccc:session-focus',
   SESSION_RESTORED:        'ccc:session-restored',
@@ -34,11 +35,20 @@ export const IPC = {
   HARNESS_COLLAPSE_WINDOW: 'harness:collapse-window',
   HARNESS_OPEN_WINDOW:     'harness:open-window',
   HARNESS_CLOSE_WINDOW:    'harness:close-window',
+  // Harness visualization dashboard (read-only project-state viewer)
+  DASHBOARD_OPEN_WINDOW:   'dashboard:open-window',
+  HARNESS_READ:            'harness:read',
+  HARNESS_SUMMARY:         'harness:summary',
+  HARNESS_LIST_SESSIONS:   'harness:list-sessions',
+  HARNESS_READ_SESSION:    'harness:read-session',
+  HARNESS_STATS:           'harness:stats',
+  RESUME_SESSION:          'ccc:resume-session',
   // CCC-MAGI install flow (panel shown by the harness window)
   MAGI_CHECK_INSTALLED:    'magi:check-installed',
   MAGI_CHECK_ENV:          'magi:check-env',
   MAGI_INSTALL_ENV:        'magi:install-env',
   MAGI_INSTALL:            'magi:install',
+  MAGI_UPDATE:             'magi:update',
   MAGI_PROGRESS:           'magi:progress',
   // Remote mirror
   REMOTE_MIRROR_URL:       'remote:mirror-url',

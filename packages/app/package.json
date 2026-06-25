@@ -17,7 +17,9 @@
     "lint": "tsc --noEmit"
   },
   "dependencies": {
-    "qrcode.react": "^4.2.0"
+    "qrcode.react": "^4.2.0",
+    "react-markdown": "^9.0.1",
+    "remark-gfm": "^4.0.0"
   },
   "devDependencies": {
     "@testing-library/jest-dom": "^6.4.6",

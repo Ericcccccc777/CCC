@@ -3,19 +3,21 @@ import { useLangContext, type LangCode } from './i18n'
 import type { MagiEnvItem, MagiProgress } from '../../shared/magi'
 
 // ─────────────────────────────────────────────────────────────────────────────
-// CCC-MAGI panel (formerly the Harness Wizard).
+// CCC-MAGI install wizard (the harness panel).
 //
-// Flow:
-//   1. scan the session's workspace for an existing CCC-MAGI install
-//      → if present: environment shows all-pass, jump to "maintaining"
-//      → if absent: run the pre-install environment check
-//   2. environment check (git / node≥18 / jq). Each failing item gets an
-//      [Install] button that installs it in the background (brew)
-//   3. once every item passes: [Install CCC-MAGI] runs `npx create-ccc-magi`
-//   4. success → "CCC-MAGI is now maintaining your project"
+// Install-only surface now. Once CCC-MAGI is installed, the console (dashboard)
+// is the single surface — main's openHarnessWindow opens the dashboard directly
+// for installed workspaces, and the "Update CCC-MAGI" control lives in the
+// dashboard Overview. So this panel never shows an "already installed" page:
+//
+//   1. scan the workspace → if already installed: open the console + close.
+//   2. else run the env check (git / node≥18 / jq). Each failing item gets an
+//      [Install] button that installs it in the background (brew).
+//   3. once every item passes: [Install CCC-MAGI] runs `npx create-ccc-magi`.
+//   4. success → open the console (dashboard) + close this window.
 // ─────────────────────────────────────────────────────────────────────────────
 
-type Phase = 'scanning' | 'env' | 'installing-magi' | 'maintaining' | 'error'
+type Phase = 'scanning' | 'env' | 'installing-magi' | 'error'
 
 interface Strings {
   scanning:        string
@@ -28,8 +30,6 @@ interface Strings {
   installMagi:     string
   installingMagi:  string
   allPass:         string
-  maintaining:     string
-  alreadyInstalled:string
   errorTitle:      string
   retry:           string
   close:           string
@@ -47,8 +47,6 @@ const STRINGS: Record<LangCode, Strings> = {
     installMagi:      'Install CCC-MAGI',
     installingMagi:   'Installing CCC-MAGI…',
     allPass:          'All checks passed',
-    maintaining:      'CCC-MAGI is now maintaining your project.',
-    alreadyInstalled: 'CCC-MAGI is already installed here.',
     errorTitle:       'Something went wrong',
     retry:            'Retry',
     close:            'Close',
@@ -64,8 +62,6 @@ const STRINGS: Record<LangCode, Strings> = {
     installMagi:      '安装 CCC-MAGI',
     installingMagi:   '正在安装 CCC-MAGI…',
     allPass:          '全部通过',
-    maintaining:      'CCC-MAGI 正在正常维护你的项目。',
-    alreadyInstalled: '此项目已安装 CCC-MAGI。',
     errorTitle:       '出错了',
     retry:            '重试',
     close:            '关闭',
@@ -81,8 +77,6 @@ const STRINGS: Record<LangCode, Strings> = {
     installMagi:      'CCC-MAGI 설치',
     installingMagi:   'CCC-MAGI 설치 중…',
     allPass:          '모든 검사 통과',
-    maintaining:      'CCC-MAGI가 프로젝트를 정상적으로 관리하고 있습니다.',
-    alreadyInstalled: '이 프로젝트에는 CCC-MAGI가 이미 설치되어 있습니다.',
     errorTitle:       '문제가 발생했습니다',
     retry:            '다시 시도',
     close:            '닫기',
@@ -100,7 +94,6 @@ export function HarnessWizard({ workspace }: HarnessWizardProps): JSX.Element {
   const [phase,          setPhase]          = useState<Phase>('scanning')
   const [items,          setItems]          = useState<MagiEnvItem[]>([])
   const [installingId,   setInstallingId]   = useState<string | null>(null)
-  const [alreadyHad,     setAlreadyHad]     = useState(false)
   const [error,          setError]          = useState<string | null>(null)
   const [log,            setLog]            = useState<string[]>([])
   const logEndRef                           = useRef<HTMLDivElement>(null)
@@ -118,15 +111,21 @@ export function HarnessWizard({ workspace }: HarnessWizardProps): JSX.Element {
     logEndRef.current?.scrollIntoView({ block: 'end' })
   }, [log])
 
-  // Initial scan: installed? → maintaining (env shown as all-pass). Else → env check.
+  // Once installed, the console is the single surface: open it and dismiss this
+  // window so the "already installed" page never appears.
+  const openConsoleAndClose = (): void => {
+    window.ccc?.openDashboard(workspace)
+    window.ccc?.closeHarnessWindow()
+  }
+
+  // Initial scan: installed? → jump straight to the console. Else → env check.
   const scan = async (): Promise<void> => {
     setPhase('scanning')
     setError(null)
     try {
       const installed = (await window.ccc?.magiCheckInstalled(workspace))?.installed ?? false
       if (installed) {
-        setAlreadyHad(true)
-        setPhase('maintaining')
+        openConsoleAndClose()
         return
       }
       const report = await window.ccc?.magiCheckEnv()
@@ -168,8 +167,8 @@ export function HarnessWizard({ workspace }: HarnessWizardProps): JSX.Element {
     try {
       const res = await window.ccc?.magiInstall(workspace)
       if (!res?.ok) { setError(res?.error ?? 'install failed'); setPhase('error'); return }
-      setAlreadyHad(false)
-      setPhase('maintaining')
+      // Installed → go straight to the console; don't show an interstitial.
+      openConsoleAndClose()
     } catch (e) {
       setError((e as Error).message)
       setPhase('error')
@@ -203,13 +202,13 @@ export function HarnessWizard({ workspace }: HarnessWizardProps): JSX.Element {
             <section className="magi-section">
               <div className="magi-section-head">
                 <h3 className="magi-section-title">{s.envTitle}</h3>
-                {(phase === 'maintaining' || allOk)
+                {allOk
                   ? <span className="magi-badge is-ok">{s.allPass}</span>
                   : <span className="magi-section-hint">{s.envHint}</span>}
               </div>
 
               <ul className="magi-env-list">
-                {(phase === 'maintaining' && alreadyHad ? FORCE_PASS : items).map(item => (
+                {items.map(item => (
                   <li key={item.id} className={`magi-env-item${item.ok ? ' is-ok' : ' is-bad'}`}>
                     <span className="magi-env-icon" aria-hidden="true">{item.ok ? '✓' : '✕'}</span>
                     <span className="magi-env-label">{item.label}</span>
@@ -241,18 +240,6 @@ export function HarnessWizard({ workspace }: HarnessWizardProps): JSX.Element {
               </div>
             )}
 
-            {phase === 'maintaining' && (
-              <div className="magi-maintaining">
-                <span className="magi-maintaining-icon" aria-hidden="true">✦</span>
-                <div className="magi-maintaining-text">
-                  <div className="magi-maintaining-title">{s.allPass}</div>
-                  <div className="magi-maintaining-sub">
-                    {alreadyHad ? s.alreadyInstalled : s.maintaining}
-                  </div>
-                </div>
-              </div>
-            )}
-
             {error && (
               <div className="magi-error">
                 <div className="magi-error-title">{s.errorTitle}</div>
@@ -273,11 +260,3 @@ export function HarnessWizard({ workspace }: HarnessWizardProps): JSX.Element {
     </div>
   )
 }
-
-// When CCC-MAGI is already installed we don't run the env probes — the panel
-// just shows the three prerequisites as satisfied (per spec: skip detection).
-const FORCE_PASS: MagiEnvItem[] = [
-  { id: 'git',  label: 'Git',          ok: true, detail: '', installable: true },
-  { id: 'node', label: 'Node.js ≥ 18', ok: true, detail: '', installable: true },
-  { id: 'jq',   label: 'jq',           ok: true, detail: '', installable: true },
-]

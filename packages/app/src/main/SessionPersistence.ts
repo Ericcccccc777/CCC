@@ -19,6 +19,7 @@ export interface PersistedSession {
   codexModelId?:    string
   startedAt?:       number
   terminalTty?:     string
+  skipPermissions?: boolean
 }
 
 export class SessionPersistence {

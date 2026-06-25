@@ -18,7 +18,9 @@ import {
   checkEnvironment as checkMagiEnvironment,
   installEnv as installMagiEnv,
   installMagi,
+  updateMagi,
 } from './MagiManager'
+import { harnessRead, harnessSummary, listSessions, readTranscriptById, readProjectStats } from './HarnessReader'
 import type { MagiEnvId } from '../shared/magi'
 import type { PlatformAdapter } from './platform/PlatformAdapter'
 import { createPlatformAdapter } from './platform'
@@ -38,6 +40,7 @@ import type {
 import { ClaudeCliManager } from './ClaudeCliManager'
 import { CodexManager } from './CodexManager'
 import { codexReasoningEffortMenuIndex, type CodexReasoningEffort } from '../shared/codex-cli'
+import { CLAUDE_REASONING_EFFORTS, type ClaudeReasoningEffort } from '../shared/claude-cli'
 import { shouldDeferCloseForRecovery, shouldRespawnClosedWatcher } from './session-recovery-policy'
 
 const WIN_WIDTH  = 400
@@ -62,6 +65,10 @@ interface SessionEntry {
   origin:           SessionOrigin
   capability:       SessionRecoveryCapability
   startedAt:        number
+  // True when launched in full-access / danger mode
+  // (--dangerously-skip-permissions). Registered with HookServer so its
+  // PreToolUse hook auto-allows instead of popping a permission request.
+  skipPermissions?: boolean
   apiProviderId?:   ApiProviderId
   apiModelId?:      string
   codexModelId?:    string
@@ -272,7 +279,10 @@ class SessionManager {
     }
   }
 
-  launch(workspace: string, modelId: string, skipPermissions = false): number {
+  // resumeSessionId set → launch `claude --resume <id>` instead of a fresh
+  // session (the console's "Resume this session"). modelId is ignored on resume
+  // (the session restores its own model).
+  launch(workspace: string, modelId: string, skipPermissions = false, resumeSessionId?: string): number {
     const id = this.nextId++
     const p  = this.port
 
@@ -290,6 +300,7 @@ class SessionManager {
       port:                 p,
       statuslineScriptPath: statuslineScript,
       skipPermissions,
+      ...(resumeSessionId ? { resumeSessionId } : {}),
     })
 
     const entry: SessionEntry = {
@@ -304,8 +315,12 @@ class SessionManager {
       origin:           'ccc-managed',
       capability:       'full',
       startedAt:        Date.now(),
+      skipPermissions,
     }
     this.sessions.set(id, entry)
+    // Danger mode: auto-allow PreToolUse so CCC mirrors the CLI's
+    // --dangerously-skip-permissions and stops popping permission requests.
+    if (skipPermissions) this.hooks.registerFullAccessSession(id)
     this.bindClose(entry, id)
     this.flushRegistrySoon()
 
@@ -394,6 +409,7 @@ class SessionManager {
         ...(entry.codexModelId && { codexModelId: entry.codexModelId }),
         startedAt: entry.startedAt,
         ...(entry.terminalTty && { terminalTty: entry.terminalTty }),
+        ...(entry.skipPermissions && { skipPermissions: entry.skipPermissions }),
       })
     }
     return result
@@ -460,8 +476,12 @@ class SessionManager {
         ...(s.apiProviderId && { apiProviderId: s.apiProviderId as ApiProviderId }),
         ...(s.apiModelId && { apiModelId: s.apiModelId }),
         ...(s.codexModelId && { codexModelId: s.codexModelId }),
+        ...(s.skipPermissions && { skipPermissions: s.skipPermissions }),
       }
       this.sessions.set(s.id, entry)
+      // Re-register danger-mode sessions so the re-injected PreToolUse hook
+      // keeps auto-allowing instead of popping permission requests.
+      if (s.skipPermissions) this.hooks.registerFullAccessSession(s.id)
       this.bindClose(entry, s.id)
       this.deferredRecoveryClosures.delete(s.id)
 
@@ -483,10 +503,30 @@ class SessionManager {
     return [...this.sessions.entries()].map(([sessionId, entry]) => this.toRestoredPayload(sessionId, entry))
   }
 
+  // Payload for a single session, so a session created outside the main window
+  // (e.g. "Resume this session" fired from the console window) can be pushed to
+  // the island via SESSION_RESTORED.
+  restoredPayloadFor(sessionId: number): SessionRestored | null {
+    const entry = this.sessions.get(sessionId)
+    return entry ? this.toRestoredPayload(sessionId, entry) : null
+  }
+
   // Switch model: uses the short alias (e.g. 'sonnet') so Claude Code
   // selects its built-in model instead of creating a custom one.
   switchModel(sessionId: number, alias: string): void {
     this.injectToConsole(sessionId, `/model ${alias}`)
+  }
+
+  // Switch reasoning effort by injecting `/effort <level>`. Claude Code accepts
+  // the level as an inline argument (verified against the effort docs), so this
+  // is the same one-shot console-injection path as switchModel — no menu
+  // navigation needed (unlike Codex). Guard against codex sessions: their TUI
+  // has no `/effort` command (effort is chosen inside Codex's /model picker).
+  switchEffort(sessionId: number, effort: ClaudeReasoningEffort): void {
+    if (!CLAUDE_REASONING_EFFORTS.includes(effort)) return
+    const entry = this.sessions.get(sessionId)
+    if (!entry || entry.mode === 'codex') return
+    this.injectToConsole(sessionId, `/effort ${effort}`)
   }
 
   injectConsoleText(sessionId: number, text: string): void {
@@ -736,6 +776,7 @@ class SessionManager {
 
   private cleanup(entry: SessionEntry, sessionId: number): void {
     this.hooks.stopTranscript(sessionId)
+    this.hooks.unregisterFullAccessSession(sessionId)
     this.codexWatcher.stop(sessionId)
     // Skip restore if another session is still using this workspace —
     // prevents the late child.on('close') from wiping out a newer session's hooks.
@@ -873,6 +914,10 @@ class IpcHandlers {
       this.manager?.kill(sessionId)
     })
 
+    ipcMain.on(IPC.SWITCH_SESSION_EFFORT, (_e, sessionId: number, effort: ClaudeReasoningEffort) => {
+      this.manager?.switchEffort(sessionId, effort)
+    })
+
     ipcMain.on(IPC.SWITCH_SESSION_MODEL, (_e, sessionId: number, alias: string) => {
       this.manager?.switchModel(sessionId, alias)
     })
@@ -962,6 +1007,11 @@ class IpcHandlers {
         e.sender.send(IPC.MAGI_PROGRESS, { kind: 'magi', line }))
     })
 
+    ipcMain.handle(IPC.MAGI_UPDATE, (e, workspace: string, force?: boolean) => {
+      return updateMagi(workspace, line =>
+        e.sender.send(IPC.MAGI_PROGRESS, { kind: 'magi', line }), { force: force === true })
+    })
+
     // Window resize for harness wizard
     ipcMain.on(IPC.HARNESS_EXPAND_WINDOW, () => {
       if (!win) return
@@ -984,12 +1034,53 @@ class IpcHandlers {
     })
 
     ipcMain.on(IPC.HARNESS_OPEN_WINDOW, (_e, workspace: string) => {
-      this.openHarnessWindow(workspace)
+      this.openHarnessWindow(workspace, win)
     })
 
     ipcMain.on(IPC.HARNESS_CLOSE_WINDOW, (e) => {
       const sender = BrowserWindow.fromWebContents(e.sender)
       if (sender && sender !== win) sender.close()
+    })
+
+    // ── Harness visualization dashboard ──
+    ipcMain.on(IPC.DASHBOARD_OPEN_WINDOW, (_e, workspace: string) => {
+      this.openDashboardWindow(workspace, win)
+    })
+
+    ipcMain.handle(IPC.HARNESS_READ, (_e, workspace: string, relPath: string) => {
+      return harnessRead(workspace, relPath)
+    })
+
+    ipcMain.handle(IPC.HARNESS_SUMMARY, (_e, workspace: string) => {
+      return harnessSummary(workspace)
+    })
+
+    ipcMain.handle(IPC.HARNESS_LIST_SESSIONS, (_e, workspace: string) => {
+      return listSessions(workspace)
+    })
+
+    ipcMain.handle(IPC.HARNESS_READ_SESSION, (_e, workspace: string, sessionId: string) => {
+      return readTranscriptById(workspace, sessionId)
+    })
+
+    ipcMain.handle(IPC.HARNESS_STATS, (_e, workspace: string) => {
+      return readProjectStats(workspace)
+    })
+
+    // "Resume this session" from the console: spawn a CCC-managed terminal that
+    // runs `claude --resume <id>` in the workspace (full island/hooks/lifecycle).
+    ipcMain.on(IPC.RESUME_SESSION, (_e, workspace: string, sessionId: string) => {
+      // sessionId flows into a shell/PowerShell launch script — restrict to the
+      // safe charset a Claude session id uses (uuid: hex + hyphen) to block
+      // command injection.
+      if (!/^[A-Za-z0-9_-]+$/.test(sessionId)) return
+      const id = this.manager?.launch(workspace, '', false, sessionId)
+      // Launched from the console window → push it to the main window's island
+      // so the resumed session shows up like any other CCC-managed session.
+      if (id != null) {
+        const payload = this.manager?.restoredPayloadFor(id)
+        if (payload) win.webContents.send(IPC.SESSION_RESTORED, payload)
+      }
     })
 
     // ── Remote mirror ──
@@ -1089,25 +1180,49 @@ class IpcHandlers {
 
   private harnessWindows = new Map<string, BrowserWindow>()
 
-  private openHarnessWindow(workspace: string): void {
+  private openHarnessWindow(workspace: string, mainWin?: BrowserWindow | null): void {
+    // CCC-MAGI already installed → skip the install wizard entirely and open
+    // the console (dashboard) directly. The wizard only exists to run the
+    // env-check + first install; once installed, the dashboard (with its own
+    // "Update CCC-MAGI" control) is the single surface.
+    if (isMagiInstalled(workspace)) {
+      this.openDashboardWindow(workspace, mainWin)
+      return
+    }
+
     const existing = this.harnessWindows.get(workspace)
     if (existing && !existing.isDestroyed()) { existing.focus(); return }
 
     const { width: sw, height: sh } = screen.getPrimaryDisplay().workAreaSize
-    const W = 760
-    const H = Math.min(820, sh - 60)
+    // 30% smaller than the original 760×820 panel. TOP_DROP lowers the top edge
+    // while keeping the bottom edge fixed — we shorten the height by the same
+    // amount we push the top down, so the panel's bottom stays put.
+    const TOP_DROP = 80
+    const W = 532
+    const H = Math.min(574, sh - 60) - TOP_DROP
+
+    // Appear below the fully-expanded CCC island, horizontally centred on it,
+    // dropped a further TOP_DROP px. Fall back to screen-centre if the main
+    // window is gone. Clamp so the panel always stays on-screen.
+    const main = mainWin && !mainWin.isDestroyed() ? mainWin.getBounds() : null
+    const x = main
+      ? Math.max(0, Math.min(Math.floor(main.x + main.width / 2 - W / 2), sw - W))
+      : Math.floor((sw - W) / 2)
+    const y = main
+      ? Math.max(0, Math.min(main.y + main.height + TOP_DROP, sh - H))
+      : Math.floor((sh - H) / 2)
 
     const win = new BrowserWindow({
-      x:               Math.floor((sw - W) / 2),
-      y:               Math.floor((sh - H) / 2),
+      x,
+      y,
       width:           W,
       height:          H,
       frame:           false,
       transparent:     false,
       alwaysOnTop:     false,
       resizable:       true,
-      minWidth:        620,
-      minHeight:       560,
+      minWidth:        434,
+      minHeight:       392,
       skipTaskbar:     false,
       hasShadow:       true,
       backgroundColor: '#0a0a0a',
@@ -1124,6 +1239,59 @@ class IpcHandlers {
     win.on('closed', () => { this.harnessWindows.delete(workspace) })
 
     const params = `?view=harness&workspace=${encodeURIComponent(workspace)}`
+    const isDev = !app.isPackaged
+    if (isDev && process.env['ELECTRON_RENDERER_URL']) {
+      win.loadURL(process.env['ELECTRON_RENDERER_URL'] + params)
+    } else {
+      win.loadFile(join(__dirname, '../renderer/index.html'), { search: params })
+    }
+  }
+
+  private dashboardWindows = new Map<string, BrowserWindow>()
+
+  // The visualization dashboard is content-heavy (6 tabbed pages), so it opens
+  // in a larger, freely-resizable window — distinct from the compact install
+  // panel above. One window per workspace; re-opening focuses the existing one.
+  private openDashboardWindow(workspace: string, mainWin?: BrowserWindow | null): void {
+    const existing = this.dashboardWindows.get(workspace)
+    if (existing && !existing.isDestroyed()) { existing.focus(); return }
+
+    const { width: sw, height: sh } = screen.getPrimaryDisplay().workAreaSize
+    const W = Math.min(1040, sw - 80)
+    const H = Math.min(760, sh - 80)
+    const main = mainWin && !mainWin.isDestroyed() ? mainWin.getBounds() : null
+    const x = main
+      ? Math.max(0, Math.min(Math.floor(main.x + main.width / 2 - W / 2), sw - W))
+      : Math.floor((sw - W) / 2)
+    const y = Math.floor((sh - H) / 2)
+
+    const win = new BrowserWindow({
+      x,
+      y,
+      width:           W,
+      height:          H,
+      frame:           false,
+      transparent:     false,
+      alwaysOnTop:     false,
+      resizable:       true,
+      minWidth:        720,
+      minHeight:       520,
+      skipTaskbar:     false,
+      hasShadow:       true,
+      backgroundColor: '#0a0a0a',
+      title:           'CCC-MAGI 控制台',
+      webPreferences: {
+        preload:          join(__dirname, '../preload/index.js'),
+        nodeIntegration:  false,
+        contextIsolation: true,
+        sandbox:          false,
+      },
+    })
+
+    this.dashboardWindows.set(workspace, win)
+    win.on('closed', () => { this.dashboardWindows.delete(workspace) })
+
+    const params = `?view=dashboard&workspace=${encodeURIComponent(workspace)}`
     const isDev = !app.isPackaged
     if (isDev && process.env['ELECTRON_RENDERER_URL']) {
       win.loadURL(process.env['ELECTRON_RENDERER_URL'] + params)

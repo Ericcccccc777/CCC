@@ -36,6 +36,13 @@ export class HookServer {
   private win:            BrowserWindow | null = null
   private harnessAsk:     { res: http.ServerResponse; timer: ReturnType<typeof setTimeout> } | null = null
   private harnessSessions = new Set<number>()
+  // Full-access ("danger mode") sessions: launched with
+  // --dangerously-skip-permissions. Claude's own permission prompts are off,
+  // but Claude Code still fires the PreToolUse hook regardless of that flag —
+  // so without this set CCC would surface its own permission popup anyway.
+  // Membership makes dispatch() auto-allow PreToolUse while leaving the
+  // statusLine / Stop / Notification hooks intact.
+  private fullAccessSessions = new Set<number>()
   private readonly preToolUseTimeoutMs: number
   // ApiUsageManager subscribes to every parsed transcript line so it can
   // pull `usage.*` off API-mode assistant messages. Set via setTranscriptSink;
@@ -79,6 +86,14 @@ export class HookServer {
 
   isHarnessSession(sessionId: number): boolean {
     return this.harnessSessions.has(sessionId)
+  }
+
+  registerFullAccessSession(sessionId: number): void {
+    this.fullAccessSessions.add(sessionId)
+  }
+
+  unregisterFullAccessSession(sessionId: number): void {
+    this.fullAccessSessions.delete(sessionId)
   }
 
   answerHarnessAsk(answer: string): void {
@@ -133,6 +148,7 @@ export class HookServer {
     this.lastDoneAt.clear()
     this.terminalAwaiting.clear()
     this.harnessSessions.clear()
+    this.fullAccessSessions.clear()
     this.mirror?.stop()
     this.mirror = null
     this.server.close()
@@ -392,6 +408,13 @@ export class HookServer {
       const tool = p.tool ?? 'unknown'
       // Harness sessions auto-allow all tool use (Claude is writing harness files)
       if (this.harnessSessions.has(p.sessionId)) {
+        this.reply(res, { exitCode: 0 })
+        this.sendState({ sessionId: p.sessionId, state: 'streaming' })
+        return
+      }
+      // Full-access / danger-mode sessions: the user explicitly opted out of
+      // permission prompts. Auto-allow without surfacing a popup.
+      if (this.fullAccessSessions.has(p.sessionId)) {
         this.reply(res, { exitCode: 0 })
         this.sendState({ sessionId: p.sessionId, state: 'streaming' })
         return

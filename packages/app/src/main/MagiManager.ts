@@ -127,3 +127,50 @@ export async function installMagi(workspace: string, onLine: (line: string) => v
   onLine('$ npx --yes create-ccc-magi@latest --force')
   return runStreaming('npx', ['--yes', 'create-ccc-magi@latest', '--force'], onLine, workspace)
 }
+
+// Update an already-installed CCC-MAGI. Per CCC-MAGI's own update path
+// (installer/bin.js + install-into.sh content-hash registry, documented in
+// docs-harness/adoption-playbook.md), a plain re-run with NO --force is the
+// safe daily-update command: the shipped-hashes registry refreshes harness
+// internals the user hasn't touched while PRESERVING user-edited files
+// (constitution.md / CLAUDE.md / AGENTS.md and .harness/state). This is the
+// key difference from installMagi() — passing --force here would clobber those
+// load-bearing user files, which is exactly what an update must not do.
+//
+// BUT: bin.js's git-clean guard (`if (!force && !dryRun)`) makes the flag-less
+// run exit 1 when the workspace has uncommitted changes (the norm right after
+// install, when the harness files aren't committed) or isn't a git repo. The
+// ONLY documented override is --force, which also resets load-bearing files
+// (with backups). So we try safe first, detect that specific refusal, and
+// report `needsForce` so the panel can offer a Force-update fallback instead
+// of surfacing a bare "exited with code 1".
+export async function updateMagi(
+  workspace: string,
+  onLine: (line: string) => void,
+  opts: { force?: boolean } = {},
+): Promise<MagiOpResult> {
+  const args = opts.force
+    ? ['--yes', 'create-ccc-magi@latest', '--force']
+    : ['--yes', 'create-ccc-magi@latest']
+  onLine(`$ npx ${args.join(' ')}`)
+
+  let captured = ''
+  const res = await runStreaming('npx', args, line => { captured += `${line}\n`; onLine(line) }, workspace)
+
+  if (res.ok) {
+    // install-into.sh ends with "✅ Installed. (N new, M updated, …)". When
+    // both N and M are 0 the workspace was already current — surface that so
+    // the panel can say "already up to date" instead of "updated".
+    const m = captured.match(/(\d+)\s+new,\s+(\d+)\s+updated/)
+    if (m && Number(m[1]) === 0 && Number(m[2]) === 0) return { ...res, noChanges: true }
+    return res
+  }
+
+  // The git-clean guard prints "has uncommitted changes" / "is not a git
+  // repository" then exits 1. Turn that into an actionable needsForce result
+  // (only when we didn't already pass --force).
+  if (!opts.force && /uncommitted changes|not a git repository/i.test(captured)) {
+    return { ok: false, needsForce: true, error: res.error }
+  }
+  return res
+}

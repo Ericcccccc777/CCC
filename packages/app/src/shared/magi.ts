@@ -24,6 +24,18 @@ export interface MagiInstalledResult {
 export interface MagiOpResult {
   ok:     boolean
   error?: string
+  // Set when an UPDATE failed only because CCC-MAGI's git-clean guard refused:
+  // the workspace has uncommitted changes (the norm right after install, when
+  // the new harness files aren't committed yet) or isn't a git repo. The panel
+  // uses this to offer a "Force update" fallback (re-runs with --force, which
+  // overwrites constitution.md / CLAUDE.md / AGENTS.md with the latest
+  // templates — the installer backs up the user's versions first).
+  needsForce?: boolean
+  // Set on a SUCCESSFUL update when the installer reported 0 new + 0 updated
+  // files (parsed from its "Installed. (N new, M updated, …)" summary) — i.e.
+  // the workspace was already current. The panel shows an "already up to date"
+  // message instead of "updated".
+  noChanges?: boolean
 }
 
 // Streamed line of stdout/stderr from a backend install, pushed to the panel.
