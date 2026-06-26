@@ -1222,22 +1222,21 @@ class IpcHandlers {
     if (existing && !existing.isDestroyed()) { existing.focus(); return }
 
     const { width: sw, height: sh } = screen.getPrimaryDisplay().workAreaSize
-    // 30% smaller than the original 760×820 panel. TOP_DROP lowers the top edge
-    // while keeping the bottom edge fixed — we shorten the height by the same
-    // amount we push the top down, so the panel's bottom stays put.
-    const TOP_DROP = 80
     const W = 532
-    const H = Math.min(574, sh - 60) - TOP_DROP
+    const H = Math.min(600, sh - 120)
 
-    // Appear below the fully-expanded CCC island, horizontally centred on it,
-    // dropped a further TOP_DROP px. Fall back to screen-centre if the main
-    // window is gone. Clamp so the panel always stays on-screen.
+    // Anchor the install wizard just below the CCC pill near the top, centred on
+    // the island. We deliberately DON'T offset by the island's height: this
+    // window is opened from the *expanded* panel, so adding main.height would
+    // push it to the bottom of the screen (the "too low" bug). Fall back to
+    // screen-centre if the main window is gone; clamp so it stays on-screen.
+    const TOP_GAP = 72
     const main = mainWin && !mainWin.isDestroyed() ? mainWin.getBounds() : null
     const x = main
       ? Math.max(0, Math.min(Math.floor(main.x + main.width / 2 - W / 2), sw - W))
       : Math.floor((sw - W) / 2)
     const y = main
-      ? Math.max(0, Math.min(main.y + main.height + TOP_DROP, sh - H))
+      ? Math.max(0, Math.min(main.y + TOP_GAP, sh - H))
       : Math.floor((sh - H) / 2)
 
     const win = new BrowserWindow({

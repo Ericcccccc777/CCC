@@ -2,9 +2,9 @@
 
 # CLI Coding Cockpit
 
-**A Dynamic-Island-style macOS overlay for Claude Code CLI, Codex CLI, and DeepSeek API sessions — drag-to-reposition, live status, permission popups, model switching.**
+**A Dynamic-Island-style macOS overlay for Claude Code CLI, Codex CLI, and DeepSeek API sessions — drag-to-reposition, live status, permission popups, model & effort switching, a project console, and remote control from your phone.**
 
-Live model + context + usage at the top of your screen · drag-to-reposition · one-click model switching · API provider support · phone mirror · sleep/wake recovery.
+Live model + context + usage at the top of your screen · drag-to-reposition · one-click model + effort switching · API provider support · remote control from phone/web · project console · sleep/wake recovery.
 
 [![macOS](https://img.shields.io/badge/macOS-14%2B-black?logo=apple)](#download-mac-binary)
 [![Version](https://img.shields.io/badge/version-0.1.1--beta-orange)](#whats-new-in-011)
@@ -64,8 +64,11 @@ CCC is built for the **CLI-curious vibe-coder** — developers who want to use C
 | **Per-session cost** | API mode tracks input/output tokens + USD cost per session |
 | **Balance polling** | Third-party providers show their account balance and 7-day rolling spend |
 | **Codex CLI support** | Codex sessions launch alongside Claude sessions, grouped separately. Streaming / done state now tracked via the Codex rollout-JSONL watcher |
-| **Phone mirror** | One-click QR code → load the active session's transcript on your phone via LAN |
-| **Sleep/wake recovery** | macOS sleep does not kill CCC-managed sessions; on wake they reattach automatically |
+| **Reasoning-effort switch** | Set Claude's effort (low → max) per session from the model picker — injects `/effort`, gated to what each model supports (Opus/Fable full, Sonnet no `xhigh`, Haiku none) |
+| **Full-access mode** | Launch a session that skips permission prompts (`--dangerously-skip-permissions`); CCC also suppresses its own permission popups for it |
+| **Remote control** | One click enables Claude Code's native Remote Control on a session — drive it (chat **and approve permission prompts**) from your phone or claude.ai/code, at home or away. Routes through Anthropic over HTTPS, no LAN required |
+| **Project console (CCC-MAGI)** | Install / update CCC-MAGI from the panel; an in-app dashboard shows project state — overview + stats (tokens / sessions / tool calls), tiered memory, and the session history list (open any past session or **resume** it in a new terminal) |
+| **Sleep/wake recovery** | macOS sleep does not kill CCC-managed sessions; on wake they reattach automatically. Sessions whose process really ended (terminal closed, `/quit`, crash) are removed from CCC |
 | **i18n** | UI in English / 中文 / 한국어 (switch in Settings) |
 
 ### What's new in 0.1.1
@@ -185,7 +188,6 @@ API mode sessions show their token consumption + USD cost on the pill in real ti
 
 A few things are intentionally out of the public release:
 
-- ❌ **Harness Wizard** — a closed-source feature for scaffolding `CLAUDE.md` rule files; kept private as a future Pro tier
 - ❌ **Bundled API keys** — you must bring your own provider credentials
 - ❌ **Auto-update** — for now, re-download the DMG manually on each release
 - ❌ **Code signing / notarization** — see the Gatekeeper note above
@@ -193,7 +195,7 @@ A few things are intentionally out of the public release:
 ### Roadmap
 
 - 🛣️ **Cloud sync** for session history and team dashboards
-- 🛣️ **Windows binaries** (the code already supports Windows via the `PlatformAdapter` abstraction; the public binary is macOS-only at v0.1.0)
+- 🛣️ **Windows binaries** — the `WindowsAdapter` now reaches macOS parity (CLI detection, window focus, session recovery); a binary ships once it's verified on a real Windows machine (CI already builds on windows-latest)
 - 🛣️ **More provider integrations** (Together AI, Groq, OpenRouter)
 - 🛣️ **Enterprise tier** with team policy + audit log
 
@@ -206,7 +208,7 @@ A few things are intentionally out of the public release:
 - 🛡️ **You own every permission decision.** When you click "Yes" / "Always" on a Bash / Edit / Read popup, the underlying tool runs against your real filesystem with your real credentials. CCC is just the surface — the consequences are yours. Treat "Always" especially carefully.
 - 💸 **API mode token costs are CCC's best estimate.** Cost/balance numbers come from your provider's API and CCC's pricing table — they're indicative, not billing-grade. Trust your provider's dashboard for the real number.
 - 🚫 **Not signed / notarized** on macOS — first launch needs the Gatekeeper bypass above.
-- 🪟 **No verified Windows build yet.** Code paths exist via `PlatformAdapter` but every shipped commit has only been manually verified on macOS. Windows users should build from source and report what works.
+- 🪟 **Windows: implemented, not runtime-verified.** The `WindowsAdapter` covers the full session lifecycle, CLI detection, window focus, and recovery, and CI builds on windows-latest — but no maintainer has verified it on a real Windows machine yet. Windows users should build from source and report what works.
 
 By using CCC you accept that it's an unfinished tool and that you remain responsible for verifying any AI-driven action it surfaces.
 
@@ -263,8 +265,11 @@ CCC 面向**对 CLI vibe coding 还没完全熟练**的开发者——你想用 
 | **逐会话成本** | API 模式实时追踪 input/output token + 美元成本 |
 | **余额轮询** | 第三方供应商显示账户余额和 7 天累计支出 |
 | **Codex CLI 支持** | Codex 会话和 Claude 会话并排管理，分组显示。streaming / done 状态现在通过 rollout-JSONL 监听器自动追踪 |
-| **手机镜像** | 一键 QR 码 → 手机通过局域网查看会话 transcript |
-| **休眠唤醒恢复** | mac 合盖再开，CCC 管理的会话不会丢，醒来自动重新挂上 |
+| **推理强度切换** | 在模型选择器里按会话设置 Claude 的 effort（low → max）—— 注入 `/effort`，按各模型支持情况限制（Opus/Fable 全档，Sonnet 无 xhigh，Haiku 无） |
+| **完全访问模式** | 启动跳过权限询问的会话（`--dangerously-skip-permissions`）；CCC 同时不再为它弹自己的权限框 |
+| **远程控制** | 一键为会话启用 Claude Code 原生 Remote Control —— 在手机或 claude.ai/code 上驱动它（聊天**并批准权限请求**），在家在外都行。经 Anthropic 走 HTTPS，无需同一局域网 |
+| **项目控制台（CCC-MAGI）** | 在面板里安装 / 更新 CCC-MAGI；内置控制台展示项目状态 —— 总览 + 统计（tokens / 会话数 / 工具调用）、分层记忆、以及会话历史列表（打开任意历史会话，或在新终端**恢复**它） |
+| **休眠唤醒恢复** | mac 合盖再开，CCC 管理的会话不会丢，醒来自动重新挂上。进程真正结束的会话（关终端、`/quit`、崩溃）会从 CCC 移除 |
 | **多语言** | 英语 / 中文 / 한국어（Settings 切换） |
 
 ### 0.1.1 新增
@@ -383,7 +388,6 @@ API 模式的会话会在悬浮条上实时显示 token 消耗和美元成本。
 
 公开版有意删除了一些内容：
 
-- ❌ **Harness Wizard** —— 用于自动生成 `CLAUDE.md` 规则文件的功能，未来作为 Pro 版预留
 - ❌ **预置 API key** —— 必须自己提供供应商凭证
 - ❌ **自动更新** —— 暂时需要每次发版手动重新下载
 - ❌ **代码签名 / 公证** —— 见上面 Gatekeeper 说明
@@ -391,7 +395,7 @@ API 模式的会话会在悬浮条上实时显示 token 消耗和美元成本。
 ### 路线图
 
 - 🛣️ **云端同步**会话历史和团队仪表盘
-- 🛣️ **Windows 版本**（代码已经通过 `PlatformAdapter` 抽象层支持 Windows，公开 v0.1.0 暂时只放 macOS 包）
+- 🛣️ **Windows 版本** —— `WindowsAdapter` 现已与 macOS 对等（CLI 检测、窗口聚焦、会话恢复）；待在真 Windows 机器上验证后再发布二进制（CI 已在 windows-latest 上构建）
 - 🛣️ **更多 API 供应商接入**（Together AI、Groq、OpenRouter 等）
 - 🛣️ **企业版** —— 团队策略 + 审计日志
 
@@ -404,7 +408,7 @@ API 模式的会话会在悬浮条上实时显示 token 消耗和美元成本。
 - 🛡️ **每个权限决定都是你的责任**。当你点 "Yes" / "Always" 时，对应的工具会用你的真实凭证在你的真实文件系统上跑。CCC 只是入口——后果由你承担。**Always** 尤其要谨慎。
 - 💸 **API 模式的 token 成本是 CCC 的估算**。成本/余额数字来自供应商 API + CCC 内置的定价表，是参考值，不是账单级别。真实数字以供应商的官方账单为准。
 - 🚫 **macOS 上未签名 / 公证** —— 首次启动需要做上面的 Gatekeeper 绕过。
-- 🪟 **目前没有验证过的 Windows 版本**。`PlatformAdapter` 抽象层里代码路径存在，但每个发版 commit 只在 macOS 上手动验证过。Windows 用户请从源码 build 并报告兼容性。
+- 🪟 **Windows：已实现，但未在真机验证**。`WindowsAdapter` 已覆盖完整会话生命周期、CLI 检测、窗口聚焦与恢复，CI 也在 windows-latest 上构建——但还没有维护者在真实 Windows 机器上验证过。Windows 用户请从源码 build 并报告兼容性。
 
 使用 CCC 即表示你接受它是一个未完成的工具，并且你对它呈现的任何 AI 驱动的操作仍然负有验证责任。
 
@@ -461,8 +465,11 @@ CCC는 **CLI vibe coding 에 아직 완전히 익숙하지 않은** 개발자를
 | **세션별 비용** | API 모드는 input/output 토큰 + USD 비용 추적 |
 | **잔액 폴링** | 서드파티 공급자의 계정 잔액 + 7일 롤링 지출 표시 |
 | **Codex CLI 지원** | Codex 세션을 Claude 세션과 별도 그룹으로 패널에 표시. streaming / done 상태도 Codex rollout-JSONL 와처로 자동 추적 |
-| **휴대폰 미러** | 원클릭 QR 코드 → LAN으로 휴대폰에서 활성 세션 transcript 로드 |
-| **슬립/웨이크 복구** | macOS 슬립이 CCC 관리 세션을 죽이지 않음; 웨이크 시 자동 재연결 |
+| **추론 강도 전환** | 모델 선택기에서 세션별로 Claude의 effort(low → max)를 설정 — `/effort` 주입, 모델별 지원 범위로 제한(Opus/Fable 전체, Sonnet은 xhigh 없음, Haiku 없음) |
+| **풀 액세스 모드** | 권한 프롬프트를 건너뛰는 세션 실행(`--dangerously-skip-permissions`); CCC도 해당 세션에 자체 권한 팝업을 띄우지 않음 |
+| **원격 제어** | 클릭 한 번으로 세션에 Claude Code 네이티브 Remote Control 활성화 — 휴대폰이나 claude.ai/code에서 조작(채팅 **및 권한 요청 승인**), 집에서도 외부에서도. Anthropic을 통해 HTTPS로 전달되며 같은 LAN 불필요 |
+| **프로젝트 콘솔(CCC-MAGI)** | 패널에서 CCC-MAGI 설치 / 업데이트; 인앱 대시보드가 프로젝트 상태 표시 — 개요 + 통계(토큰 / 세션 / 툴 호출), 계층형 메모리, 세션 히스토리 목록(과거 세션 열기 또는 새 터미널에서 **재개**) |
+| **슬립/웨이크 복구** | macOS 슬립이 CCC 관리 세션을 죽이지 않음; 웨이크 시 자동 재연결. 프로세스가 실제로 종료된 세션(터미널 닫기, `/quit`, 크래시)은 CCC에서 제거 |
 | **i18n** | 영어 / 中文 / 한국어 (Settings에서 전환) |
 
 ### 0.1.1 변경 사항
@@ -581,7 +588,6 @@ API 모드 세션은 알약에 토큰 소비 + USD 비용을 실시간 표시합
 
 공개 릴리스에서 의도적으로 제외된 부분:
 
-- ❌ **Harness Wizard** — `CLAUDE.md` 룰 파일을 자동 생성하는 비공개 기능; 향후 Pro 티어용으로 비공개 유지
 - ❌ **번들된 API 키** — 자신의 공급자 자격 증명 사용 필수
 - ❌ **자동 업데이트** — 현재는 릴리스마다 DMG 재다운로드 필요
 - ❌ **코드 서명 / 공증** — 위 Gatekeeper 안내 참조
@@ -589,7 +595,7 @@ API 모드 세션은 알약에 토큰 소비 + USD 비용을 실시간 표시합
 ### 로드맵
 
 - 🛣️ **클라우드 동기화** — 세션 히스토리와 팀 대시보드
-- 🛣️ **Windows 바이너리** (`PlatformAdapter` 추상화로 코드는 이미 Windows 지원; 공개 v0.1.0은 macOS 전용)
+- 🛣️ **Windows 바이너리** — `WindowsAdapter`가 이제 macOS와 동등(CLI 감지, 창 포커스, 세션 복구); 실제 Windows 머신에서 검증된 후 바이너리 배포(CI는 이미 windows-latest에서 빌드)
 - 🛣️ **더 많은 공급자 통합** (Together AI, Groq, OpenRouter)
 - 🛣️ **엔터프라이즈 티어** — 팀 정책 + 감사 로그
 
@@ -602,7 +608,7 @@ API 모드 세션은 알약에 토큰 소비 + USD 비용을 실시간 표시합
 - 🛡️ **모든 권한 결정은 사용자의 책임입니다**. Bash / Edit / Read 팝업에서 "Yes" / "Always" 를 누르면 실제 파일 시스템에서 실제 자격 증명으로 툴이 실행됩니다. CCC는 표면 일 뿐 — 결과는 당신의 것입니다. **Always** 는 특히 신중히 사용하세요.
 - 💸 **API 모드 토큰 비용은 CCC의 추정치**입니다. 비용/잔액 숫자는 공급자 API와 CCC의 가격표에서 나옵니다 — 참고용이지 청구 단계의 정확도가 아닙니다. 실제 숫자는 공급자 대시보드를 신뢰하세요.
 - 🚫 **macOS에서 서명 / 공증되지 않음** — 첫 실행 시 위 Gatekeeper 우회가 필요합니다.
-- 🪟 **아직 검증된 Windows 빌드 없음**. `PlatformAdapter` 추상화를 통해 코드 경로는 존재하지만 모든 릴리스 커밋은 macOS에서만 수동 검증되었습니다. Windows 사용자는 소스에서 빌드하고 동작 여부를 보고해주세요.
+- 🪟 **Windows: 구현됨, 실기기 미검증**. `WindowsAdapter`가 전체 세션 라이프사이클, CLI 감지, 창 포커스, 복구를 다루고 CI도 windows-latest에서 빌드하지만 — 아직 실제 Windows 머신에서 검증한 메인테이너는 없습니다. Windows 사용자는 소스에서 빌드하고 동작 여부를 보고해주세요.
 
 CCC 사용 시, 이것이 미완성 도구이며 표시하는 모든 AI 기반 작업에 대한 검증 책임이 사용자에게 남아있음을 받아들이는 것입니다.
 

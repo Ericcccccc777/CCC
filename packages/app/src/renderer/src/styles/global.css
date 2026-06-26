@@ -138,12 +138,25 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  opacity: 0.7;
-  transition: opacity 0.2s;
+  /* Neon pixel glow on the three CCC's. Brighter + saturated, with a warm
+     orange halo matching the pixel fill. */
+  filter:
+    brightness(1.12) saturate(1.18)
+    drop-shadow(0 0 4px rgba(255,150,70,0.55))
+    drop-shadow(0 0 10px rgba(255,115,40,0.35));
+  /* On app open: a neon-tube "strike" flicker (opacity, snapped via steps so it
+     reads as a hard on/off, not a fade), then a gentle idle breathing. */
+  animation:
+    ccc-power-on 1.7s steps(1, end) both,
+    ccc-idle 5.5s ease-in-out 1.8s infinite;
+  will-change: opacity;
 }
 
 .island:hover .ccc-logo {
-  opacity: 0.9;
+  filter:
+    brightness(1.28) saturate(1.28)
+    drop-shadow(0 0 6px rgba(255,165,90,0.72))
+    drop-shadow(0 0 15px rgba(255,125,50,0.48));
 }
 
 /* ── Rings (two circles side-by-side, hover for tooltip) ── */
@@ -3249,4 +3262,68 @@ select.hw-field-input {
   background:   rgba(255,60,60,0.32);
   border-color: rgba(255,60,60,0.8);
   color:        rgba(255,200,200,1);
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   Neon pixel polish — power-on, glow, and tactile feedback
+   ───────────────────────────────────────────────────────────────────────── */
+
+/* PixelCCC neon power-on: a stuttering strike like a neon tube warming up.
+   steps(1,end) on the timing function snaps between these opacities (no fade),
+   which reads as digital/pixel flicker. */
+@keyframes ccc-power-on {
+  0%   { opacity: 0;    }
+  8%   { opacity: 0.45; }   /* first strike */
+  12%  { opacity: 0.08; }
+  20%  { opacity: 0.75; }
+  26%  { opacity: 0.12; }
+  34%  { opacity: 1;    }   /* nearly on */
+  40%  { opacity: 0.35; }   /* stutter */
+  46%  { opacity: 1;    }
+  62%  { opacity: 0.6;  }   /* last flicker */
+  68%  { opacity: 1;    }
+  100% { opacity: 1;    }
+}
+
+/* Gentle "alive" breathing once powered on (opacity only, so it never fights
+   the constant glow filter or the hover filter). */
+@keyframes ccc-idle {
+  0%, 100% { opacity: 1;    }
+  50%      { opacity: 0.84; }
+}
+
+/* Neon halo on the Claude star while the agent is active. Base filter only —
+   the breathing/blink keyframes animate opacity, so there's no conflict. */
+.logo-breathing { filter: drop-shadow(0 0 5px rgba(255,150,70,0.55)); }
+.logo-waiting   { filter: drop-shadow(0 0 5px rgba(110,170,255,0.55)); }
+
+/* Tactile press feedback on the primary controls. */
+.model-chip:active,
+.effort-chip:active,
+.action-btn:active,
+.add-session-btn:active,
+.magi-primary:active,
+.magi-secondary:active,
+.sess-resume-btn:active,
+.remote-popup-btn:active,
+.dash-update-btn:active,
+.perm-btn:active {
+  transform: scale(0.96);
+}
+
+/* Neon hover/selected glow on the orange model + effort chips. */
+.model-chip { transition: background 0.15s, border-color 0.15s, box-shadow 0.15s, transform 0.1s; }
+.model-chip:hover:not(.model-chip--selected) { box-shadow: 0 0 9px rgba(204,155,122,0.20); }
+.model-chip--selected { box-shadow: 0 0 11px rgba(204,155,122,0.30); }
+.effort-chip { transition: background 0.15s, border-color 0.15s, color 0.15s, box-shadow 0.15s, transform 0.1s; }
+.effort-chip:hover:not(.effort-chip--selected) { box-shadow: 0 0 8px rgba(204,155,122,0.18); }
+.effort-chip--selected { box-shadow: 0 0 10px rgba(204,155,122,0.30); }
+
+/* Respect reduced-motion: keep the glow, drop the flicker/breathing/press. */
+@media (prefers-reduced-motion: reduce) {
+  .ccc-logo { animation: none; opacity: 1; }
+  .model-chip:active, .effort-chip:active, .action-btn:active,
+  .add-session-btn:active, .magi-primary:active, .magi-secondary:active,
+  .sess-resume-btn:active, .remote-popup-btn:active, .dash-update-btn:active,
+  .perm-btn:active { transform: none; }
 }
