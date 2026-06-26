@@ -1,7 +1,7 @@
 import { spawn, execFileSync, execSync } from 'child_process'
 import { writeFileSync, readFileSync } from 'fs'
 import { join } from 'path'
-import { tmpdir } from 'os'
+import { tmpdir, homedir } from 'os'
 import {
   type FocusSessionOptions,
   type HookEventName,
@@ -793,6 +793,23 @@ export class MacOSAdapter implements PlatformAdapter {
   // Standard Electron convention on macOS: app stays alive when all windows close.
   shouldQuitOnAllWindowsClosed(): boolean {
     return false
+  }
+
+  // GUI apps on macOS don't inherit the login-shell PATH, so brew/npm-global
+  // dirs are invisible unless we prepend them when probing for claude/codex/jq.
+  cliPathEntries(): readonly string[] {
+    const home = homedir()
+    return [
+      '/usr/local/bin',
+      '/opt/homebrew/bin',
+      '/opt/homebrew/sbin',
+      `${home}/.npm-global/bin`,
+      `${home}/.local/bin`,
+    ]
+  }
+
+  whichCommand(binary: string): string {
+    return `command -v ${binary}`
   }
 
   capabilities(): PlatformCapabilities {

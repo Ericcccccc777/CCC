@@ -1,14 +1,16 @@
 import { exec } from 'child_process'
-import { homedir } from 'os'
+import { delimiter } from 'path'
 import type { ClaudeCliStatus } from '../shared/claude-cli'
+import { cliPathEntries, whichCommand } from './platform'
 
 const DETECT_TIMEOUT_MS = 10_000
-const CLI_PATH_EXTRA = [
-  '/usr/local/bin',
-  '/opt/homebrew/bin',
-  `${homedir()}/.npm-global/bin`,
-  `${homedir()}/.local/bin`,
-].join(':')
+
+// Prepend the platform's extra CLI dirs, joined with the OS path separator
+// (':' on POSIX, ';' on Windows). Using path.delimiter is the fix for Windows,
+// where the old hardcoded ':' join mangled the real PATH.
+function detectPath(): string {
+  return [...cliPathEntries(), process.env.PATH ?? ''].filter(Boolean).join(delimiter)
+}
 
 function execAsync(command: string, timeoutMs: number = DETECT_TIMEOUT_MS): Promise<{ stdout: string; stderr: string } | null> {
   return new Promise(resolve => {
@@ -16,7 +18,7 @@ function execAsync(command: string, timeoutMs: number = DETECT_TIMEOUT_MS): Prom
       timeout: timeoutMs,
       env: {
         ...process.env,
-        PATH: `${CLI_PATH_EXTRA}:${process.env.PATH ?? ''}`,
+        PATH: detectPath(),
       },
     }, (err, stdout, stderr) => {
       if (err && !stdout.trim()) { resolve(null); return }
@@ -88,7 +90,7 @@ export class ClaudeCliManager {
   }
 
   private async detectInstalled(): Promise<boolean> {
-    const result = await execAsync('command -v claude')
+    const result = await execAsync(whichCommand('claude'))
     return result !== null && result.stdout.length > 0
   }
 

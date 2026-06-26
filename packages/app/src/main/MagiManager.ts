@@ -1,24 +1,18 @@
 import { exec, spawn } from 'child_process'
 import { existsSync } from 'fs'
-import { join } from 'path'
-import { homedir } from 'os'
+import { join, delimiter } from 'path'
 import type {
   MagiEnvId, MagiEnvItem, MagiEnvReport, MagiOpResult,
 } from '../shared/magi'
+import { cliPathEntries, whichCommand } from './platform'
 
-// GUI apps on macOS don't inherit the login-shell PATH, so brew/node/jq/npx
-// living in Homebrew or npm-global dirs are invisible unless we extend PATH —
-// same fix ClaudeCliManager uses for `claude`.
-const PATH_EXTRA = [
-  '/usr/local/bin',
-  '/opt/homebrew/bin',
-  '/opt/homebrew/sbin',
-  `${homedir()}/.npm-global/bin`,
-  `${homedir()}/.local/bin`,
-].join(':')
-
+// GUI apps don't inherit the login-shell PATH, so brew/node/jq/npx living in
+// Homebrew (macOS) or npm/node (Windows) dirs are invisible unless we extend
+// PATH. Joined with path.delimiter so Windows uses ';' (the old hardcoded ':'
+// join corrupted PATH there). Same source as the Claude/Codex managers.
 function patchedEnv(): NodeJS.ProcessEnv {
-  return { ...process.env, PATH: `${PATH_EXTRA}:${process.env.PATH ?? ''}` }
+  const path = [...cliPathEntries(), process.env.PATH ?? ''].filter(Boolean).join(delimiter)
+  return { ...process.env, PATH: path }
 }
 
 const DETECT_TIMEOUT_MS = 12_000
@@ -45,7 +39,10 @@ function runStreaming(
   return new Promise(resolve => {
     let proc: ReturnType<typeof spawn>
     try {
-      proc = spawn(cmd, args, { cwd, env: patchedEnv() })
+      // On Windows the CLIs we stream (npx) are `.cmd` shims that child_process
+      // can't spawn directly — run them through the shell. POSIX is unchanged
+      // (args here are fixed, shell-safe constants).
+      proc = spawn(cmd, args, { cwd, env: patchedEnv(), shell: process.platform === 'win32' })
     } catch (e) {
       resolve({ ok: false, error: (e as Error).message })
       return
@@ -104,7 +101,7 @@ export async function checkEnvironment(): Promise<MagiEnvReport> {
 const BREW_PKG: Record<MagiEnvId, string> = { git: 'git', node: 'node', jq: 'jq' }
 
 async function hasBrew(): Promise<boolean> {
-  const r = await execAsync('command -v brew')
+  const r = await execAsync(whichCommand('brew'))
   return r.ok && r.stdout.length > 0
 }
 

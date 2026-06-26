@@ -17,3 +17,20 @@ export function createPlatformAdapter(): PlatformAdapter {
       )
   }
 }
+
+// Cached adapter for the CLI-detection helpers below, so the Claude/Codex/MAGI
+// managers (which aren't constructed with an adapter) can get platform-correct
+// PATH dirs + `which` without each reading `process.platform` (Rule 11).
+let cachedAdapter: PlatformAdapter | null = null
+function sharedAdapter(): PlatformAdapter {
+  if (!cachedAdapter) cachedAdapter = createPlatformAdapter()
+  return cachedAdapter
+}
+
+export function cliPathEntries(): readonly string[] {
+  return sharedAdapter().cliPathEntries()
+}
+
+export function whichCommand(binary: string): string {
+  return sharedAdapter().whichCommand(binary)
+}

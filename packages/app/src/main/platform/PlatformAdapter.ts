@@ -133,6 +133,15 @@ export interface PlatformAdapter {
   resolveSessionTty(opts: ResolveSessionTtyOptions): string | null
   recoverSessionProcess(opts: RecoverSessionProcessOptions): RecoveredSessionProcess | null
 
+  // ── CLI detection helpers (used by Claude/Codex/MAGI managers) ─
+  // Extra PATH directories to prepend when probing for CLIs — GUI apps don't
+  // inherit the login-shell PATH. Platform-specific (Homebrew/npm-global on
+  // macOS; npm/node dirs on Windows). Callers join with `path.delimiter`.
+  cliPathEntries(): readonly string[]
+  // Shell command that prints a binary's path if it's on PATH and exits non-zero
+  // otherwise — `command -v <bin>` on POSIX, `where <bin>` on Windows.
+  whichCommand(binary: string): string
+
   // ── Console keystroke injection (model switch / reply text) ─
   injectKeystrokes(opts: InjectKeystrokesOptions): void
   injectCodexModelSelection(opts: InjectCodexModelSelectionOptions): void

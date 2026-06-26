@@ -1,16 +1,16 @@
 import { exec } from 'child_process'
 import { readFileSync } from 'fs'
 import { homedir } from 'os'
+import { delimiter } from 'path'
 import type { CodexCliStatus, CodexModel } from '../shared/codex-cli'
 import { FALLBACK_CODEX_MODELS } from '../shared/codex-cli'
+import { cliPathEntries, whichCommand } from './platform'
 
 const DETECT_TIMEOUT_MS = 10_000
-const CODEX_PATH_EXTRA = [
-  '/usr/local/bin',
-  '/opt/homebrew/bin',
-  `${homedir()}/.npm-global/bin`,
-  `${homedir()}/.local/bin`,
-].join(':')
+
+function detectPath(): string {
+  return [...cliPathEntries(), process.env.PATH ?? ''].filter(Boolean).join(delimiter)
+}
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' ? value as Record<string, unknown> : null
@@ -27,7 +27,7 @@ function execAsync(command: string, timeoutMs: number = DETECT_TIMEOUT_MS): Prom
       timeout: timeoutMs,
       env: {
         ...process.env,
-        PATH: `${CODEX_PATH_EXTRA}:${process.env.PATH ?? ''}`,
+        PATH: detectPath(),
       },
     }, (err, stdout, stderr) => {
       if (err) { resolve(null); return }
@@ -125,7 +125,7 @@ export class CodexManager {
   }
 
   private async detectInstalled(): Promise<boolean> {
-    const result = await execAsync('command -v codex')
+    const result = await execAsync(whichCommand('codex'))
     return result !== null && result.stdout.length > 0
   }
 

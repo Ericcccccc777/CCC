@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { WindowsAdapter, buildCodexPowerShellScripts, buildPowerShellEnvLines } from '../../src/main/platform/WindowsAdapter'
+import { WindowsAdapter, buildCodexPowerShellScripts, buildPowerShellEnvLines, buildFocusWindowScript, parseWindowsSessionPid } from '../../src/main/platform/WindowsAdapter'
 
 // Tests cover the pure-data methods only (buildHookCommands, buildStatusLineCommand,
 // capabilities, shouldQuitOnAllWindowsClosed). The spawn-using lifecycle methods
@@ -147,6 +147,56 @@ class WindowsAdapterTests {
         it('exposes the Codex picker navigation hook behind the adapter interface', () => {
           expect(typeof adapter.injectCodexModelSelection).toBe('function')
           expect(adapter.injectCodexModelSelection).toBeDefined()
+        })
+      })
+
+      describe('cliPathEntries / whichCommand', () => {
+        it('whichCommand uses Windows `where`', () => {
+          expect(adapter.whichCommand('claude')).toBe('where claude')
+        })
+
+        it('cliPathEntries returns string dirs (npm/node), never the POSIX Homebrew paths', () => {
+          const entries = adapter.cliPathEntries()
+          expect(Array.isArray(entries)).toBe(true)
+          for (const e of entries) expect(typeof e).toBe('string')
+          expect(entries.some(e => e.includes('/opt/homebrew'))).toBe(false)
+        })
+      })
+
+      describe('buildFocusWindowScript', () => {
+        const script = buildFocusWindowScript(4242, 'C:\\tmp\\ccc-focus.ps1')
+        it('targets the given PID and fronts its window via SetForegroundWindow + SW_RESTORE', () => {
+          expect(script).toContain('Get-Process -Id 4242')
+          expect(script).toContain('SetForegroundWindow')
+          expect(script).toContain('ShowWindow($p.MainWindowHandle, 9)')   // SW_RESTORE
+        })
+        it('guards on MainWindowHandle and self-deletes', () => {
+          expect(script).toContain('MainWindowHandle -ne 0')
+          expect(script).toContain("Remove-Item 'C:\\tmp\\ccc-focus.ps1'")
+        })
+      })
+
+      describe('parseWindowsSessionPid', () => {
+        const sample = JSON.stringify([
+          { ProcessId: 100, CommandLine: 'powershell.exe -File C:\\tmp\\ccc-outer-7.ps1' },
+          { ProcessId: 200, CommandLine: 'powershell.exe -File C:\\tmp\\ccc-inner-7.ps1' },
+          { ProcessId: 300, CommandLine: 'powershell.exe -File C:\\tmp\\ccc-codex-inner-9.ps1' },
+        ])
+
+        it('finds the claude inner powershell by session marker', () => {
+          expect(parseWindowsSessionPid(sample, 'ccc-inner-7.ps1')).toBe(200)
+        })
+        it('finds the codex inner powershell separately (no cross-engine match)', () => {
+          expect(parseWindowsSessionPid(sample, 'ccc-codex-inner-9.ps1')).toBe(300)
+          expect(parseWindowsSessionPid(sample, 'ccc-inner-9.ps1')).toBeNull()
+        })
+        it('handles a single-object (non-array) ConvertTo-Json result', () => {
+          const one = JSON.stringify({ ProcessId: 42, CommandLine: 'x ccc-inner-3.ps1 y' })
+          expect(parseWindowsSessionPid(one, 'ccc-inner-3.ps1')).toBe(42)
+        })
+        it('returns null on no match or bad JSON', () => {
+          expect(parseWindowsSessionPid(sample, 'ccc-inner-999.ps1')).toBeNull()
+          expect(parseWindowsSessionPid('not json', 'ccc-inner-7.ps1')).toBeNull()
         })
       })
 

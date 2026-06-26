@@ -14,9 +14,53 @@ import type {
   LaunchResult,
   PlatformAdapter,
   PlatformCapabilities,
+  RecoverSessionProcessOptions,
+  RecoveredSessionProcess,
   RespawnMonitorOptions,
   RespawnResult,
 } from './PlatformAdapter'
+
+// PowerShell script (run hidden, self-deleting) that brings a process's main
+// window to the foreground. The session's visible powershell host PID is in the
+// pidFile; SW_RESTORE (9) un-minimizes before SetForegroundWindow. Exported for
+// tests. MainWindowHandle is 0 for windowless/Windows-Terminal-hosted processes,
+// in which case this is a no-op (best-effort, like macOS' AppleScript fronting).
+export function buildFocusWindowScript(pid: number, selfPath: string): string {
+  return `Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public class CCWin {
+  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
+  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int n);
+}
+'@ -Language CSharp
+$p = Get-Process -Id ${pid} -ErrorAction SilentlyContinue
+if ($p -and $p.MainWindowHandle -ne 0) {
+  [CCWin]::ShowWindow($p.MainWindowHandle, 9) | Out-Null
+  [CCWin]::SetForegroundWindow($p.MainWindowHandle) | Out-Null
+}
+Remove-Item '${selfPath}' -ErrorAction SilentlyContinue
+`
+}
+
+// Find a CCC session's inner powershell PID by scanning Win32_Process command
+// lines for the inner-script name (which carries the CCC session id). Pure +
+// exported for tests; the adapter feeds it `Get-CimInstance … | ConvertTo-Json`.
+export function parseWindowsSessionPid(rawJson: string, innerScriptMarker: string): number | null {
+  let data: unknown
+  try { data = JSON.parse(rawJson) } catch { return null }
+  const list = Array.isArray(data) ? data : [data]
+  for (const entry of list) {
+    if (!entry || typeof entry !== 'object') continue
+    const rec = entry as Record<string, unknown>
+    const cmd = typeof rec['CommandLine'] === 'string' ? rec['CommandLine'] : ''
+    if (cmd.includes(innerScriptMarker)) {
+      const pid = Number(rec['ProcessId'])
+      if (Number.isInteger(pid) && pid > 0) return pid
+    }
+  }
+  return null
+}
 
 interface ConsoleInputSegment {
   readonly text: string
@@ -220,9 +264,29 @@ export class WindowsAdapter implements PlatformAdapter {
     return null
   }
 
-  recoverSessionProcess(opts: { readonly currentPid?: number; readonly pidFile: string }): { readonly pid: number } | null {
+  recoverSessionProcess(opts: RecoverSessionProcessOptions): RecoveredSessionProcess | null {
     const pid = opts.currentPid ?? this.readPidFile(opts.pidFile)
-    return pid && this.isPidAlive(pid) ? { pid } : null
+    if (pid && this.isPidAlive(pid)) return { pid }
+    // Recorded PID is gone (e.g. CCC restarted with a stale persisted pid):
+    // re-find the session's inner powershell by its inner-script filename, which
+    // embeds the CCC session id. Mirrors macOS' CCC-marked process scan.
+    return this.findSessionByInnerScript(opts.sessionId, opts.engine)
+  }
+
+  private findSessionByInnerScript(sessionId: number, engine: 'claude' | 'codex'): RecoveredSessionProcess | null {
+    const marker = engine === 'codex' ? `ccc-codex-inner-${sessionId}.ps1` : `ccc-inner-${sessionId}.ps1`
+    try {
+      const out = execSync(
+        'powershell.exe -NonInteractive -ExecutionPolicy Bypass -Command ' +
+        '"Get-CimInstance Win32_Process -Filter \\"Name=\'powershell.exe\'\\" | ' +
+        'Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress"',
+        { stdio: 'pipe', encoding: 'utf8', timeout: 5000 },
+      )
+      const pid = parseWindowsSessionPid(out, marker)
+      return pid != null ? { pid } : null
+    } catch {
+      return null
+    }
   }
 
   private readPidFile(pidFile: string): number | null {
@@ -322,13 +386,43 @@ Remove-Item '${safePath}' -ErrorAction SilentlyContinue
     } catch { /* non-fatal */ }
   }
 
-  // Windows users normally bring a window to the foreground via taskbar
-  // / Alt-Tab; CCC clicking a session does not need to programmatically
-  // steal OS focus the way the macOS Terminal.app path does. Tracked as
-  // a future enhancement (would require either FindWindow + SetForeground
-  // P/Invoke or a hidden marker in the PowerShell window title we set).
-  focusSession(_opts: FocusSessionOptions): void {
-    /* no-op on Windows for now (sessionId / pidFile both unused) */
+  // Bring the session's terminal window to the foreground via SetForegroundWindow
+  // on its host powershell PID (from pidFile). Best-effort: silently does nothing
+  // if the PID/window can't be resolved (mirrors macOS' AppleScript fronting).
+  focusSession(opts: FocusSessionOptions): void {
+    let pid: string
+    try { pid = readFileSync(opts.pidFile, 'utf8').trim() } catch { return }
+    if (!pid || isNaN(Number(pid))) return
+
+    const scriptPath = join(this.tmp, `ccc-focus-${pid}-${Date.now()}.ps1`)
+    const safePath   = scriptPath.replace(/'/g, "''")
+    try {
+      writeFileSync(scriptPath, buildFocusWindowScript(Number(pid), safePath), 'utf8')
+      spawn('powershell.exe', [
+        '-ExecutionPolicy', 'Bypass',
+        '-WindowStyle',     'Hidden',
+        '-NonInteractive',
+        '-File',            scriptPath,
+      ], { stdio: 'ignore', windowsHide: true })
+    } catch { /* non-fatal */ }
+  }
+
+  // GUI apps don't inherit the login-shell PATH; prepend the common npm/node
+  // install dirs so claude/codex/npx resolve even when CCC was launched from
+  // Explorer. Joined with path.delimiter (';') by the caller — the key fix vs.
+  // the old ':'-joined Homebrew list that corrupted PATH on Windows.
+  cliPathEntries(): readonly string[] {
+    const env = process.env
+    return [
+      env.APPDATA      && join(env.APPDATA, 'npm'),                       // npm global bin
+      env.ProgramFiles && join(env.ProgramFiles, 'nodejs'),              // node installer
+      env.LOCALAPPDATA && join(env.LOCALAPPDATA, 'pnpm'),                // pnpm global
+      env.LOCALAPPDATA && join(env.LOCALAPPDATA, 'Microsoft', 'WindowsApps'),
+    ].filter((p): p is string => typeof p === 'string' && p.length > 0)
+  }
+
+  whichCommand(binary: string): string {
+    return `where ${binary}`
   }
 
   buildHookCommands(sessionId: number, port: number): Record<HookEventName, string> {

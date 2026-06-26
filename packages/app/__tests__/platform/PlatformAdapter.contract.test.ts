@@ -50,6 +50,25 @@ class PlatformAdapterContractTests {
               expect(typeof adapter.shouldQuitOnAllWindowsClosed()).toBe('boolean')
             })
           })
+
+          describe('cliPathEntries()', () => {
+            it('returns an array of non-empty path strings', () => {
+              const entries = adapter.cliPathEntries()
+              expect(Array.isArray(entries)).toBe(true)
+              for (const e of entries) {
+                expect(typeof e).toBe('string')
+                expect(e.length).toBeGreaterThan(0)
+              }
+            })
+          })
+
+          describe('whichCommand()', () => {
+            it('returns a shell command string that includes the binary name', () => {
+              const cmd = adapter.whichCommand('claude')
+              expect(typeof cmd).toBe('string')
+              expect(cmd).toContain('claude')
+            })
+          })
         })
       }
     })
