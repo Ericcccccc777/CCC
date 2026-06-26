@@ -73,6 +73,64 @@ export interface HarnessCheckpoint {
   [key: string]:      unknown
 }
 
+// ── Workflow templates (data-driven workflow view) ───────────────────────────
+// CCC-MAGI MAY write a `.harness/state/workflow-template.json` selecting the
+// active workflow template, plus canonical templates under
+// `.harness/workflows/templates/<id>.json`. When absent the project is on the
+// `full-stack` template by default (backward compatible). Every field is
+// optional / defensively typed — older installs won't have any of this.
+
+// A stage slot tags a stage's special role in the pipeline (verify / human /
+// watch gates). `null`/absent = an ordinary stage.
+export type WorkflowSlot = 'VERIFY-GATE' | 'HUMAN-REVIEW' | 'WATCH' | null
+
+// One ordered stage in a template's `stages[]`. `n` is the stage number that
+// per-feature checkpoints (`current_stage`, `stages_completed`, …) index into.
+export interface WorkflowStage {
+  n?:           number
+  id?:          string
+  title?:       string
+  skill?:       string | null      // null = guidance / manual stage (no skill)
+  slot?:        WorkflowSlot
+  lanes?:       string[] | null    // null = applies to all lanes
+  optional_if?: string | null
+  desc?:        string
+  [key: string]: unknown
+}
+
+// `.harness/state/workflow-template.json` — the active selection (committed).
+export interface WorkflowTemplateSelection {
+  schema_version?: number | string
+  template_id?:    string
+  recommended_id?: string
+  chosen_at?:      string
+  customized?:     boolean
+  customizations?: unknown[]
+  stages?:         WorkflowStage[] | null   // non-null only when customized=true
+  [key: string]:   unknown
+}
+
+// `.harness/workflows/templates/<id>.json` — a canonical template definition.
+export interface WorkflowTemplateFile {
+  schema_version?: number | string
+  id?:             string
+  title?:          string
+  summary?:        string
+  stages?:         WorkflowStage[]
+  [key: string]:   unknown
+}
+
+// The resolved active template surfaced to the renderer — the selection's
+// metadata merged with whichever `stages[]` won the fallback chain.
+export interface ActiveWorkflowTemplate {
+  template_id:    string
+  title:          string
+  summary?:       string
+  customized:     boolean
+  customizations: unknown[]
+  stages:         WorkflowStage[]
+}
+
 // `.harness/state/todolist.json`
 export type TodoItemStatus    = 'todo' | 'doing' | 'done'
 export type TodoFnStatus      = 'planned' | 'in-progress' | 'done' | 'abandoned'
@@ -187,4 +245,5 @@ export interface HarnessSummary {
   checkpoints:  HarnessCheckpoint[]
   todolist:     Todolist | null
   memory:       MagiMemory
+  workflow:     ActiveWorkflowTemplate | null   // resolved active workflow template (null = not installed)
 }

@@ -20,6 +20,7 @@ const summary: HarnessSummary = {
     archive:      [],
     conventions:  null,
   },
+  workflow: null,
 }
 
 interface Bridge {

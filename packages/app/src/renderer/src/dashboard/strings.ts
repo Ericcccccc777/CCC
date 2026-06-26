@@ -36,6 +36,7 @@ export interface DashStrings {
   noConstitution: string
   // workflow
   theNineStages:  string
+  tplCustomized:  string
   theThreeLanes:  string
   liveProgress:   string
   lane:           string
@@ -140,6 +141,7 @@ const EN: DashStrings = {
   noInfo: 'No project info found.',
   noConstitution: 'No constitution.md found.',
   theNineStages: 'The 9 workflow stages',
+  tplCustomized: 'customized',
   theThreeLanes: 'Three lanes',
   liveProgress: 'Active features',
   lane: 'Lane',
@@ -238,6 +240,7 @@ const ZH: DashStrings = {
   noInfo: '没有找到项目信息。',
   noConstitution: '没有找到 constitution.md。',
   theNineStages: '工作流 9 个阶段',
+  tplCustomized: '已定制',
   theThreeLanes: '三条通道',
   liveProgress: '进行中的功能',
   lane: '通道',

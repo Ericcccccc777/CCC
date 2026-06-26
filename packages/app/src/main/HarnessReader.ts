@@ -6,6 +6,7 @@ import { extractUsageDelta } from './api/TokenUsageAccumulator'
 import type {
   HarnessSummary, HarnessInstall, HarnessCheckpoint, Todolist,
   TranscriptMessage, SessionListItem, MagiMemory, MagiMemoryEntry, ProjectStats,
+  WorkflowTemplateSelection, WorkflowTemplateFile, ActiveWorkflowTemplate, WorkflowStage,
 } from '../shared/harness'
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -55,6 +56,75 @@ function readCheckpoints(workspace: string): HarnessCheckpoint[] {
     if (cp) out.push(cp)
   }
   return out
+}
+
+// ── Workflow template resolution (data-driven Workflow view) ──────────────────
+//
+// CCC-MAGI MAY write `.harness/state/workflow-template.json` (the active
+// selection) and canonical templates under `.harness/workflows/templates/<id>.json`.
+// We resolve the effective template via this fallback chain — never throwing:
+//
+//   1. selection present + customized=true   → use selection.stages inline
+//   2. selection present + customized=false  → load templates/<template_id>.json
+//   3. selection absent                      → default template_id 'full-stack'
+//   4. template FILE missing / unknown id    → load templates/full-stack.json
+//   5. full-stack.json also missing          → empty stages (renderer falls back)
+//
+// The returned object always has a usable shape; an empty `stages` array signals
+// the renderer to keep its built-in hardcoded fallback (old behavior preserved).
+
+const DEFAULT_TEMPLATE_ID = 'full-stack'
+
+// Keep only stage entries that are objects; pass fields through defensively. We
+// intentionally don't validate field types here — the shared types are all
+// optional and the renderer tolerates partial stages.
+function sanitizeStages(stages: unknown): WorkflowStage[] {
+  if (!Array.isArray(stages)) return []
+  return stages.filter((s): s is WorkflowStage => !!s && typeof s === 'object')
+}
+
+function loadTemplateFile(workspace: string, id: string): WorkflowTemplateFile | null {
+  // `id` originates from the (committed) selection file; guard the path anyway —
+  // a hand-edited id with slashes/.. must not escape the templates dir.
+  if (!id || /[\\/]/.test(id) || id.includes('..')) return null
+  return readJson<WorkflowTemplateFile>(
+    workspace, join('.harness', 'workflows', 'templates', `${id}.json`))
+}
+
+// Resolve the active workflow template for the workspace. Returns null only when
+// nothing is resolvable AND there's no default file — but always prefers an
+// object with an (possibly empty) stages array so the renderer never crashes.
+export function resolveWorkflowTemplate(workspace: string): ActiveWorkflowTemplate {
+  const sel = readJson<WorkflowTemplateSelection>(
+    workspace, join('.harness', 'state', 'workflow-template.json'))
+
+  // Case 1: customized selection carries its own inline ordered stages.
+  if (sel && sel.customized === true && Array.isArray(sel.stages)) {
+    return {
+      template_id:    typeof sel.template_id === 'string' ? sel.template_id : DEFAULT_TEMPLATE_ID,
+      title:          typeof sel.template_id === 'string' ? sel.template_id : DEFAULT_TEMPLATE_ID,
+      summary:        undefined,
+      customized:     true,
+      customizations: Array.isArray(sel.customizations) ? sel.customizations : [],
+      stages:         sanitizeStages(sel.stages),
+    }
+  }
+
+  // Cases 2-4: resolve a canonical template file by id, falling back to full-stack.
+  const wantedId = sel && typeof sel.template_id === 'string' && sel.template_id
+    ? sel.template_id
+    : DEFAULT_TEMPLATE_ID
+  const file = loadTemplateFile(workspace, wantedId)
+    ?? (wantedId !== DEFAULT_TEMPLATE_ID ? loadTemplateFile(workspace, DEFAULT_TEMPLATE_ID) : null)
+
+  return {
+    template_id:    file?.id ?? wantedId,
+    title:          file?.title ?? wantedId,
+    summary:        typeof file?.summary === 'string' ? file.summary : undefined,
+    customized:     sel?.customized === true,
+    customizations: sel && Array.isArray(sel.customizations) ? sel.customizations : [],
+    stages:         sanitizeStages(file?.stages),
+  }
 }
 
 // ── Transcript (AI conversation history, Page 5) ──────────────────────────────
@@ -362,6 +432,7 @@ export function harnessSummary(workspace: string): HarnessSummary {
       checkpoints:  [],
       todolist:     null,
       memory:       EMPTY_MEMORY,
+      workflow:     null,
     }
   }
   return {
@@ -372,5 +443,6 @@ export function harnessSummary(workspace: string): HarnessSummary {
     checkpoints:  readCheckpoints(workspace),
     todolist:     readJson<Todolist>(workspace, join('.harness', 'state', 'todolist.json')),
     memory:       readMagiMemory(workspace),
+    workflow:     resolveWorkflowTemplate(workspace),
   }
 }
