@@ -3,7 +3,7 @@ import { AddressInfo } from 'net'
 import { BrowserWindow, ipcMain } from 'electron'
 import { statSync, openSync, readSync, closeSync } from 'fs'
 import { IPC } from '../shared/ipc-channels'
-import type { SessionStateUpdate, ToolPermission, SessionMetricsUpdate } from '../shared/session-state'
+import type { SessionStateUpdate, SessionLifecycleState, ToolPermission, SessionMetricsUpdate } from '../shared/session-state'
 
 interface Pending {
   res:       http.ServerResponse
@@ -24,6 +24,13 @@ export class HookServer {
   private transcripts     = new Map<number, TranscriptEntry>()
   private alwaysAllowed   = new Map<number, Set<string>>()
   private lastDoneAt      = new Map<number, number>()
+  // Last time genuine model/tool activity was seen for a session (a /hook event
+  // or a transcript line). NOT bumped by statusLine refreshes — those tick even
+  // when the session is idle. Drives the idle-completion backstop (sweepIdle).
+  private lastActivityAt  = new Map<number, number>()
+  // Last lifecycle state pushed to the renderer, per session. Lets sweepIdle()
+  // distinguish "stuck running" from "already done".
+  private lastState       = new Map<number, SessionLifecycleState>()
   // Sessions whose AskUserQuestion popup timed out without a renderer answer.
   // Claude Code is now rendering the question in the terminal and waiting on
   // user input there. Until the next Stop event, transcript→streaming is
@@ -52,6 +59,21 @@ export class HookServer {
   // pull `usage.*` off API-mode assistant messages. Set via setTranscriptSink;
   // null means no consumer (Anthropic-only run).
   private transcriptSink: ((sessionId: number, parsed: Record<string, unknown>) => void) | null = null
+
+  // Idle-completion backstop timer (see sweepIdle). Started in start(),
+  // cleared in stop().
+  private idleSweepTimer: ReturnType<typeof setInterval> | null = null
+
+  // Trailing PreToolUse POSTs can land AFTER a Stop on slow transports
+  // (Windows spawns hooks via PowerShell — far slower than macOS node), which
+  // would flip a just-`done` session back to `streaming`. Within this window
+  // after a Stop, auto-allowed tool calls still reply normally but do NOT flip
+  // lifecycle state. Mirrors the 2 s transcript grace in processTranscriptLine.
+  private static readonly STREAM_GRACE_MS = 3_000
+  // Backstop: a session stuck in a running state with no activity for this long
+  // is force-completed (covers any missed Stop or unmodeled hook-ordering race).
+  private static readonly IDLE_DONE_MS  = 5 * 60_000
+  private static readonly IDLE_SWEEP_MS = 30_000
 
   // 120s default (was 30s). With the renderer-side permission queue
   // (parallel-tool-call fix), the user can have multiple permission popups
@@ -113,6 +135,7 @@ export class HookServer {
     return new Promise(resolve => {
       this.server.listen(0, '127.0.0.1', () => {
         this.port = (this.server.address() as AddressInfo).port
+        this.idleSweepTimer = setInterval(() => this.sweepIdle(), HookServer.IDLE_SWEEP_MS)
         resolve(this.port)
       })
     })
@@ -150,8 +173,11 @@ export class HookServer {
     }
     for (const [, t] of this.transcripts) clearInterval(t.timer)
     this.transcripts.clear()
+    if (this.idleSweepTimer) { clearInterval(this.idleSweepTimer); this.idleSweepTimer = null }
     this.alwaysAllowed.clear()
     this.lastDoneAt.clear()
+    this.lastActivityAt.clear()
+    this.lastState.clear()
     this.terminalAwaiting.clear()
     this.harnessSessions.clear()
     this.fullAccessSessions.clear()
@@ -168,6 +194,8 @@ export class HookServer {
     clearInterval(t.timer)
     this.transcripts.delete(sessionId)
     this.lastDoneAt.delete(sessionId)
+    this.lastActivityAt.delete(sessionId)
+    this.lastState.delete(sessionId)
     this.terminalAwaiting.delete(sessionId)
     this.remoteSessions.delete(sessionId)
   }
@@ -341,6 +369,7 @@ export class HookServer {
   private processTranscriptLine(sessionId: number, line: string): void {
     let obj: Record<string, unknown>
     try { obj = JSON.parse(line) as Record<string, unknown> } catch { return }
+    this.lastActivityAt.set(sessionId, Date.now())
     // Forward every parsed line to ApiUsageManager (no-op for Anthropic
     // sessions; ApiUsageManager filters by registered sessionId). The sink
     // never throws — even if it did we want to keep the lifecycle logic
@@ -417,19 +446,20 @@ export class HookServer {
     p: { sessionId: number; event: string; tool?: string; toolInput?: unknown; message?: string },
     res: http.ServerResponse,
   ): void {
+    this.lastActivityAt.set(p.sessionId, Date.now())
     if (p.event === 'pretooluse') {
       const tool = p.tool ?? 'unknown'
       // Harness sessions auto-allow all tool use (Claude is writing harness files)
       if (this.harnessSessions.has(p.sessionId)) {
         this.reply(res, { exitCode: 0 })
-        this.sendState({ sessionId: p.sessionId, state: 'streaming' })
+        this.maybeStream(p.sessionId)
         return
       }
       // Full-access / danger-mode sessions: the user explicitly opted out of
       // permission prompts. Auto-allow without surfacing a popup.
       if (this.fullAccessSessions.has(p.sessionId)) {
         this.reply(res, { exitCode: 0 })
-        this.sendState({ sessionId: p.sessionId, state: 'streaming' })
+        this.maybeStream(p.sessionId)
         return
       }
       // Remote-control sessions: defer to Claude Code's native permission prompt
@@ -437,12 +467,12 @@ export class HookServer {
       // phone via mobile push instead of CCC's desktop-only popup.
       if (this.remoteSessions.has(p.sessionId)) {
         this.reply(res, { passthrough: true })
-        this.sendState({ sessionId: p.sessionId, state: 'streaming' })
+        this.maybeStream(p.sessionId)
         return
       }
       if (this.alwaysAllowed.get(p.sessionId)?.has(tool)) {
         this.reply(res, { exitCode: 0 })
-        this.sendState({ sessionId: p.sessionId, state: 'streaming' })
+        this.maybeStream(p.sessionId)
         return
       }
       const hookKey = `ptu-${p.sessionId}-${Date.now()}`
@@ -489,7 +519,38 @@ export class HookServer {
     }
   }
 
+  // Send `streaming` only when outside the post-Stop grace window. A trailing
+  // PreToolUse arriving just after a Stop (common on Windows, where hooks are
+  // spawned via slow PowerShell) must not resurrect a `done` session.
+  private maybeStream(sessionId: number): void {
+    const lastDone = this.lastDoneAt.get(sessionId) ?? 0
+    if (Date.now() - lastDone > HookServer.STREAM_GRACE_MS) {
+      this.sendState({ sessionId, state: 'streaming' })
+    }
+  }
+
+  // Backstop only — the STREAM_GRACE_MS guard in dispatch() is the real fix for
+  // the known trailing-PreToolUse race. Force-completes a session stuck in a
+  // running state with no activity for IDLE_DONE_MS. Never fires while the
+  // session is legitimately blocked on the user (open permission popup or an
+  // AskUserQuestion terminal picker). Caveat: a single tool call that runs
+  // silently for > IDLE_DONE_MS (e.g. a very long build) is marked done early;
+  // the icon self-corrects to streaming on the next transcript write.
+  private sweepIdle(): void {
+    const now = Date.now()
+    for (const [sessionId, last] of this.lastActivityAt) {
+      const state = this.lastState.get(sessionId)
+      if (state !== 'streaming' && state !== 'waiting') continue
+      if (now - last < HookServer.IDLE_DONE_MS) continue
+      const hasPendingHook = [...this.pendingHooks.values()].some(p => p.sessionId === sessionId)
+      if (hasPendingHook || this.terminalAwaiting.has(sessionId)) continue
+      this.lastDoneAt.set(sessionId, now)
+      this.sendState({ sessionId, state: 'done' })
+    }
+  }
+
   private sendState(update: SessionStateUpdate): void {
+    if (update.state) this.lastState.set(update.sessionId, update.state)
     this.win?.webContents.send(IPC.SESSION_STATE_CHANGED, update)
   }
 }

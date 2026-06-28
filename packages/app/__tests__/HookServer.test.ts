@@ -493,6 +493,111 @@ class HookServerTimeoutTests {
         expect(metricsSent[0]!.reset5hAt).toBeUndefined()
       })
     })
+
+    // Regression: the Windows "stuck running" bug. A trailing PreToolUse POST
+    // (e.g. the harness's after-reply scratchpad Write) can arrive AFTER the
+    // Stop event on slow transports — Windows spawns hooks via PowerShell, far
+    // slower than macOS node — flipping a just-`done` session back to
+    // `streaming`. maybeStream()'s STREAM_GRACE_MS guard suppresses that;
+    // sweepIdle() is the longer-horizon backstop for any unmodeled stuck state.
+    describe('stop→pretooluse ordering race + idle backstop', () => {
+      let server: HookServer
+      let port:   number
+      let sent:   SessionStateUpdate[]
+
+      beforeEach(async () => {
+        server = new HookServer(80)
+        sent = []
+        const fakeWin = {
+          webContents: {
+            send: (channel: string, payload: unknown): void => {
+              if (channel === IPC.SESSION_STATE_CHANGED) sent.push(payload as SessionStateUpdate)
+            },
+          },
+          isDestroyed: (): boolean => false,
+        }
+        server.attachWindow(fakeWin as unknown as Parameters<HookServer['attachWindow']>[0])
+        port = await server.start()
+      })
+      afterEach(() => { server.stop() })
+
+      const postHook = (body: object): Promise<void> =>
+        new Promise<void>((resolve, reject) => {
+          const json = JSON.stringify(body)
+          const req = http.request(
+            { hostname: '127.0.0.1', port, path: '/hook', method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(json) } },
+            (res: http.IncomingMessage) => { res.on('data', () => { /* drain */ }); res.on('end', () => resolve()) },
+          )
+          req.on('error', reject); req.write(json); req.end()
+        })
+
+      const setLastDone = (sessionId: number, at: number): void => {
+        ;(server as unknown as { lastDoneAt: Map<number, number> }).lastDoneAt.set(sessionId, at)
+      }
+      const setState = (sessionId: number, state: string): void => {
+        ;(server as unknown as { lastState: Map<number, string> }).lastState.set(sessionId, state)
+      }
+      const setActivity = (sessionId: number, at: number): void => {
+        ;(server as unknown as { lastActivityAt: Map<number, number> }).lastActivityAt.set(sessionId, at)
+      }
+      const sweepIdle = (): void => {
+        ;(server as unknown as { sweepIdle: () => void }).sweepIdle()
+      }
+
+      it('trailing auto-allowed PreToolUse within grace does NOT resurrect a done session', async () => {
+        server.registerFullAccessSession(1)
+        await postHook({ sessionId: 1, event: 'stop' })
+        expect(sent.at(-1)).toEqual({ sessionId: 1, state: 'done' })
+        // Trailing pretooluse (e.g. the scratchpad Write) lands just after Stop.
+        await postHook({ sessionId: 1, event: 'pretooluse', tool: 'Write', toolInput: { file_path: 'x' } })
+        // No streaming emitted after done — the session stays done.
+        expect(sent.filter(s => s.state === 'streaming')).toEqual([])
+        expect(sent.at(-1)).toEqual({ sessionId: 1, state: 'done' })
+      })
+
+      it('auto-allowed PreToolUse AFTER the grace window flips to streaming (genuine new turn)', async () => {
+        server.registerFullAccessSession(1)
+        setLastDone(1, Date.now() - 10_000)  // a Stop well beyond STREAM_GRACE_MS
+        await postHook({ sessionId: 1, event: 'pretooluse', tool: 'Bash', toolInput: { command: 'ls' } })
+        expect(sent).toEqual([{ sessionId: 1, state: 'streaming' }])
+      })
+
+      it('sweepIdle force-completes a session stuck running with stale activity', () => {
+        setState(1, 'streaming')
+        setActivity(1, Date.now() - 6 * 60_000)  // 6 min idle
+        sweepIdle()
+        expect(sent.at(-1)).toEqual({ sessionId: 1, state: 'done' })
+      })
+
+      it('sweepIdle leaves a recently-active running session alone', () => {
+        setState(1, 'streaming')
+        setActivity(1, Date.now() - 1_000)  // 1 s ago
+        sweepIdle()
+        expect(sent).toEqual([])
+      })
+
+      it('sweepIdle never force-completes a session already done', () => {
+        setState(1, 'done')
+        setActivity(1, Date.now() - 6 * 60_000)
+        sweepIdle()
+        expect(sent).toEqual([])
+      })
+
+      it('sweepIdle skips a session blocked on a permission popup', () => {
+        setState(1, 'waiting')
+        setActivity(1, Date.now() - 6 * 60_000)
+        ;(server as unknown as {
+          pendingHooks: Map<string, { res: object; timer: NodeJS.Timeout; sessionId: number }>
+        }).pendingHooks.set('ptu-x', {
+          res:   { writeHead: (): void => { /* noop */ }, end: (): void => { /* noop */ } },
+          timer: setTimeout(() => { /* noop */ }, 60_000),
+          sessionId: 1,
+        })
+        sweepIdle()
+        expect(sent).toEqual([])
+      })
+    })
   }
 }
 
