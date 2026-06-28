@@ -502,7 +502,7 @@ const zh: Translations = {
   accessibilityBannerBtn:   '打开系统设置',
   overlayCornerQuestion: '待回答',
   overlayCornerDone:     '已完成',
-  overlayDropCorner:     '角落',
+  overlayDropCorner:     '简约',
   overlayDropHide:       '隐藏',
   overlayDropDefault:    '默认',
   responseComplete:   '响应完成',

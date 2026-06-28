@@ -354,34 +354,31 @@ body {
 .snap-zone.is-active .snap-zone__label {
   color: rgba(255,236,180,1);
 }
+/* The two edge bands span the full work-area height so they read clearly as
+   "drag to this screen edge". The label sits near the top where the pill
+   actually travels (the drag is horizontal along the rest line). Widths
+   match App.tsx's EDGE_ZONE_W so the highlight lines up with the hit-test. */
 .snap-zone--corner {
-  /* Matches App.tsx's cornerZoneRect (SNAP_CORNER_SIZE = 168 at top-left). */
+  /* Left edge band → corner-shrunk mode. */
   top:    0;
   left:   0;
-  width:  168px;
-  height: 168px;
-  border-radius: 24px;
+  width:  160px;
+  height: 100%;
+  border-radius: 0 28px 28px 0;
+  align-items: flex-start;
+  padding-top: 56px;
 }
 .snap-zone--hide {
-  /* Matches App.tsx's hideZoneRect (SNAP_HIDE_WIDTH 280 × SNAP_HIDE_HEIGHT 36
-     centered at top-edge). Slightly different border radius so it visually
-     reads as a "strip". */
+  /* Right edge band → top-hidden mode. */
   top:    0;
-  left:   50%;
-  transform: translateX(-50%);
-  width:  280px;
-  height: 36px;
-  border-radius: 0 0 18px 18px;
-}
-.snap-zone--default {
-  /* Matches App.tsx's defaultZoneRect (SNAP_DEFAULT_WIDTH 440 × SNAP_DEFAULT_H
-     84, top = SNAP_HIDE_HEIGHT + SNAP_DEFAULT_GAP = 48). */
-  top:    48px;
-  left:   50%;
-  transform: translateX(-50%);
-  width:  440px;
-  height: 84px;
-  border-radius: 30px;
+  right:  0;
+  left:   auto;
+  transform: none;
+  width:  160px;
+  height: 100%;
+  border-radius: 28px 0 0 28px;
+  align-items: flex-start;
+  padding-top: 56px;
 }
 
 /* ── Session list ── */

@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
-import type { MouseEvent as ReactMouseEvent } from 'react'
+import type { CSSProperties, MouseEvent as ReactMouseEvent } from 'react'
 import { Island, MODELS_INFO } from './components/Island'
 import { ApiSwitchPopup } from './components/ApiSwitchPopup'
 import { CodexSwitchPopup } from './components/CodexSwitchPopup'
@@ -35,13 +35,17 @@ interface DragState {
   // Pointer in *screen* coordinates. Stored as screen coords because the
   // BrowserWindow resizes on drag-engage, so window-local coords would
   // shift mid-drag. Render-time converts to window-local via workArea.
+  // The drag is horizontal-only (the user asked for left/right movement at
+  // a fixed height) so only screenX tracks the cursor; the pill's vertical
+  // position is locked to the rest line at render time.
   screenX:   number
-  screenY:   number
   // Cursor offset within the pill at mousedown. Pill renders at
-  // (cursor − offset), so whatever the user grabbed (left icon, ring,
-  // pill body) stays pinned under the cursor for the entire drag.
+  // (cursor − offsetX) on the X axis so whatever the user grabbed (left
+  // icon, ring, pill body) stays pinned under the cursor for the drag.
   offsetX:   number
-  offsetY:   number
+  // Pill width at drag-engage — used to clamp the saved resting center so a
+  // dropped pill (and its expand/popup) stays fully on-screen.
+  pillWidth: number
   hoverZone: HoverZone | null
 }
 
@@ -106,47 +110,29 @@ function computePillHeight(opts: {
   return h
 }
 
-// Snap-zone rects in *screen* coords. Three discrete drop targets:
-//   - corner: top-left square → corner-shrunk mode (circle)
-//   - top:    thin band along the very top edge → top-hidden mode (strip)
-//   - default: pill-shaped box at top-center, just below the hide strip →
-//              default mode (the resting position the pill normally sits at)
-// Layout is non-overlapping so each is a distinct visible target; corner
-// still gets priority on hit-test for safety against future tweaks.
-const SNAP_CORNER_SIZE   = 168
-const SNAP_HIDE_HEIGHT   = 36
-const SNAP_HIDE_WIDTH    = 280
-const SNAP_DEFAULT_GAP   = 12      // gap between hide band and default box
-const SNAP_DEFAULT_WIDTH = 440
-const SNAP_DEFAULT_H     = 84
+// ── Horizontal drag model ──
+// The pill slides left/right along the top line (vertical movement is
+// locked). Where it lands maps to a mode purely by the cursor's X:
+//   - left edge band  → 'corner' → corner-shrunk mode (简约 circle)
+//   - right edge band → 'top'    → top-hidden mode (auto-hide strip)
+//   - everything in between → 'default' → pill rests at that x
+// EDGE_ZONE_W must match the .snap-zone--corner / --hide widths in
+// global.css so the highlighted band lines up with the hit-test.
+const EDGE_ZONE_W          = 160
+// The pill's resting top within the overlay window — matches the .island
+// margin-top in default mode, so engaging a drag causes no vertical jump.
+const DRAG_REST_TOP        = 10
+// Keep a moved default-mode pill's CENTER at least this far from the
+// work-area edges. Covers the widest stacked content (the ~520px permission
+// popup) so a relocated pill never paints partly off-screen.
+const DEFAULT_CENTER_INSET = 260
 
-function cornerZoneRect(wa: WorkArea): Bounds {
-  return { x: wa.x, y: wa.y, width: SNAP_CORNER_SIZE, height: SNAP_CORNER_SIZE }
-}
-function hideZoneRect(wa: WorkArea): Bounds {
-  return {
-    x: wa.x + Math.floor((wa.width - SNAP_HIDE_WIDTH) / 2),
-    y: wa.y,
-    width:  SNAP_HIDE_WIDTH,
-    height: SNAP_HIDE_HEIGHT,
-  }
-}
-function defaultZoneRect(wa: WorkArea): Bounds {
-  return {
-    x: wa.x + Math.floor((wa.width - SNAP_DEFAULT_WIDTH) / 2),
-    y: wa.y + SNAP_HIDE_HEIGHT + SNAP_DEFAULT_GAP,
-    width:  SNAP_DEFAULT_WIDTH,
-    height: SNAP_DEFAULT_H,
-  }
-}
-function pointInRect(x: number, y: number, r: Bounds): boolean {
-  return x >= r.x && x <= r.x + r.width && y >= r.y && y <= r.y + r.height
-}
-function classifyHoverZone(x: number, y: number, wa: WorkArea): HoverZone | null {
-  if (pointInRect(x, y, cornerZoneRect(wa)))  return 'corner'
-  if (pointInRect(x, y, hideZoneRect(wa)))    return 'top'
-  if (pointInRect(x, y, defaultZoneRect(wa))) return 'default'
-  return null
+// Classify a drag by the cursor's screen X. Never null — every horizontal
+// position belongs to exactly one of the three contiguous bands.
+function classifyHoverZone(x: number, wa: WorkArea): HoverZone {
+  if (x <= wa.x + EDGE_ZONE_W)              return 'corner'
+  if (x >= wa.x + wa.width - EDGE_ZONE_W)   return 'top'
+  return 'default'
 }
 import type { ApiProviderId, ApiProviderListEntry } from '../../shared/api-provider'
 import type { ApiBalanceSnapshot, ApiUsageSnapshot } from '../../shared/api-usage'
@@ -264,6 +250,11 @@ export function App(): JSX.Element {
   const [overlayPeek, setOverlayPeek] = useState(false)
   const [dragState,   setDragState]   = useState<DragState | null>(null)
   const [workArea,    setWorkArea]    = useState<WorkArea | null>(null)
+  // Horizontal resting position (window-local CENTER x) of the pill in
+  // default mode, set when a horizontal drag settles in the middle band.
+  // null = top-center (the historical default). In-session only — a restart
+  // resets to center, matching the "drag is not persisted" contract.
+  const [defaultCenterX, setDefaultCenterX] = useState<number | null>(null)
   // Corner-mode "Session complete" banner auto-hides 3s after state→done.
   // Tracked here so the corner banner condition can fall back to a bare
   // circle once the timeout fires. Resets on mode-change or state-change.
@@ -656,20 +647,19 @@ export function App(): JSX.Element {
     if (e.button !== 0) return  // left-click only
     const startClientX = e.clientX
     const startClientY = e.clientY
-    // Snapshot the window's screen position right now. The window is about
-    // to be resized when drag engages, which changes window.screenX/Y, so
-    // we can't recompute screen coords for the start point after the fact.
+    // Snapshot the window's screen X right now. The window is about to be
+    // resized when drag engages, which changes window.screenX, so we can't
+    // recompute screen coords for the start point after the fact.
     const startWinScreenX = window.screenX
-    const startWinScreenY = window.screenY
-    // Cursor offset within the pill's bounding box — render-time pins the
-    // pill at (cursor − offset) so wherever the user grabbed (the state
-    // icon on the left, the ring on the right, etc.) stays under the
+    // Horizontal cursor offset within the pill's bounding box — render-time
+    // pins the pill at (cursor − offsetX) so wherever the user grabbed (the
+    // state icon on the left, the ring on the right, etc.) stays under the
     // cursor for the entire drag. Without this the pill snaps so its
     // center jumps to the cursor at drag-engage.
     const pillEl = (e.currentTarget as HTMLElement).closest<HTMLElement>('.island')
     const pillRect = pillEl?.getBoundingClientRect()
     const offsetX = pillRect ? startClientX - pillRect.left : 0
-    const offsetY = pillRect ? startClientY - pillRect.top  : 0
+    const pillWidth = pillRect ? pillRect.width : PILL_WIDTH
     primaryPressActiveRef.current = true
     longPressStartRef.current = { x: startClientX, y: startClientY }
     longPressTimerRef.current = window.setTimeout(() => {
@@ -683,34 +673,40 @@ export function App(): JSX.Element {
       // Convert from old-window-local to screen coords using the window
       // position captured at mousedown.
       const screenX = startWinScreenX + startClientX
-      const screenY = startWinScreenY + startClientY
       setDragState({
         fromMode:  overlayModeRef.current,
         screenX,
-        screenY,
         offsetX,
-        offsetY,
-        hoverZone: classifyHoverZone(screenX, screenY, wa),
+        pillWidth,
+        hoverZone: classifyHoverZone(screenX, wa),
       })
     }, LONG_PRESS_MS)
   }, [expanded, showModelPicker])
 
   // Settle an engaged drag at the given window-local point. Shared by the
   // normal mouseup path and the lost-mouseup self-heal in onMove below.
-  const settleDragAt = useCallback((clientX: number, clientY: number): void => {
+  const settleDragAt = useCallback((clientX: number): void => {
     const cur = dragStateRef.current
     if (!cur) return
     const wa = workAreaRef.current
     const screenX = window.screenX + clientX
-    const screenY = window.screenY + clientY
-    const zone = wa ? classifyHoverZone(screenX, screenY, wa) : null
-    // Dropping outside every zone reverts to whichever mode the drag
-    // started from — never lose the prior mode by accident.
+    // Horizontal-only: the cursor's X alone picks the mode. Left edge →
+    // corner-shrunk, right edge → top-hidden, middle → default.
+    const zone = wa ? classifyHoverZone(screenX, wa) : 'default'
     const nextMode: OverlayMode =
-      zone === 'top'     ? 'top-hidden'    :
-      zone === 'corner'  ? 'corner-shrunk' :
-      zone === 'default' ? 'default'       :
-      cur.fromMode
+      zone === 'top'    ? 'top-hidden'    :
+      zone === 'corner' ? 'corner-shrunk' :
+      'default'
+    // Landing in the middle band: remember where the pill rests so it stays
+    // put. Save the CENTER (left + half width) clamped so the pill — and any
+    // expand/popup that grows around that center — stays fully on-screen.
+    if (nextMode === 'default' && wa) {
+      const pillLeft  = screenX - wa.x - cur.offsetX
+      const rawCenter = pillLeft + cur.pillWidth / 2
+      const minC = DEFAULT_CENTER_INSET
+      const maxC = Math.max(minC, wa.width - DEFAULT_CENTER_INSET)
+      setDefaultCenterX(Math.round(Math.min(maxC, Math.max(minC, rawCenter))))
+    }
     // Suppress the trailing click that follows mouseup so the pill doesn't
     // immediately toggle expand after a drag.
     justDraggedRef.current = true
@@ -734,7 +730,7 @@ export function App(): JSX.Element {
       if ((e.buttons & 1) === 0 && (primaryPressActiveRef.current || dragStateRef.current)) {
         primaryPressActiveRef.current = false
         cancelLongPress()
-        settleDragAt(e.clientX, e.clientY)
+        settleDragAt(e.clientX)
         return
       }
       // Cancel pending long-press if the user moved before the timer fired
@@ -745,16 +741,16 @@ export function App(): JSX.Element {
         const dy = e.clientY - start.y
         if (dx * dx + dy * dy > DRAG_THRESHOLD * DRAG_THRESHOLD) cancelLongPress()
       }
-      // Update drag position once engaged. Window is fullscreen-sized during
-      // drag, so window.screenX/Y track workArea.x/y and we can derive
-      // screen coords from e.clientX/Y consistently.
+      // Update drag position once engaged. Horizontal-only: only the X
+      // updates; the pill's Y is locked to the rest line at render time.
+      // Window is fullscreen-sized during drag, so window.screenX tracks
+      // workArea.x and we derive screen X from e.clientX consistently.
       const cur = dragStateRef.current
       if (cur) {
         const wa = workAreaRef.current
         const screenX = window.screenX + e.clientX
-        const screenY = window.screenY + e.clientY
-        const zone = wa ? classifyHoverZone(screenX, screenY, wa) : null
-        setDragState({ ...cur, screenX, screenY, hoverZone: zone })
+        const zone = wa ? classifyHoverZone(screenX, wa) : 'default'
+        setDragState({ ...cur, screenX, hoverZone: zone })
       }
     }
     const onUp = (e: MouseEvent): void => {
@@ -762,7 +758,7 @@ export function App(): JSX.Element {
       // clears the press flag exactly when the primary button comes up.
       if ((e.buttons & 1) === 0) primaryPressActiveRef.current = false
       cancelLongPress()
-      settleDragAt(e.clientX, e.clientY)
+      settleDragAt(e.clientX)
     }
     // Focus loss / occlusion mid-press means the mouseup will be delivered
     // elsewhere — a pending long-press must not engage drag afterwards.
@@ -1509,20 +1505,32 @@ export function App(): JSX.Element {
 
   // Convert drag screen coords to window-local for Island's `position: fixed`
   // pill. During drag the BrowserWindow is fullscreen at workArea.x/y, so
-  // local = screen - workArea origin. Subtract the grab-offset so the pill's
-  // top-left edge sits at (cursor − offset) — the point the user grabbed
-  // stays pinned under the cursor.
+  // local = screen - workArea origin. Subtract the grab-offset on X so the
+  // point the user grabbed stays pinned under the cursor. Y is LOCKED to the
+  // rest line (DRAG_REST_TOP) — the drag is horizontal-only, so the pill
+  // slides left/right but never up/down.
   const islandDragState = dragState && workArea ? {
     fromMode:  dragState.fromMode,
     pointerX:  dragState.screenX - workArea.x - dragState.offsetX,
-    pointerY:  dragState.screenY - workArea.y - dragState.offsetY,
+    pointerY:  DRAG_REST_TOP,
     hoverZone: dragState.hoverZone,
   } : null
+
+  // Position the pill at its saved horizontal center in default mode. The
+  // base .island-wrapper CSS centers via `left: 50%; translateX(-50%)`;
+  // overriding `left` (keeping the translate) recenters on the saved x.
+  // Only applied at rest in default mode — drag and the other modes own
+  // their own positioning.
+  const wrapperStyle: CSSProperties | undefined =
+    overlayMode === 'default' && defaultCenterX !== null && !dragState
+      ? { left: `${defaultCenterX}px` }
+      : undefined
 
   return (
     <div
       className={wrapperClass}
       ref={wrapperRef}
+      style={wrapperStyle}
       onMouseEnter={handleMouseEnter}
       onMouseDown={rememberPointer}
       onMouseMove={handleMouseMove}

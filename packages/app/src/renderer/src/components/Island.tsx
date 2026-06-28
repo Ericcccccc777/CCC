@@ -801,13 +801,12 @@ export function Island({
         )}
       </div>
 
-      {/* Snap-zone overlays — only painted during a drag. Window is sized
-          to the work area while dragging, so position:fixed coords here are
-          window-local (= screen coords when wa.x/y are 0; close enough for
-          visual guidance — hit-test in App.tsx uses real screen coords).
-          Three discrete targets: corner (top-left circle), hide (top-center
-          thin band), default (top-center pill below the hide band). The
-          `is-active` modifier brightens the target when hovered. */}
+      {/* Snap-zone overlays — only painted during a drag. The drag is
+          horizontal-only, so the targets are the two work-area edge bands:
+          drag into the LEFT band → corner-shrunk (简约 circle), into the
+          RIGHT band → top-hidden (auto-hide strip). The whole middle is
+          plain default, so it needs no painted target. The `is-active`
+          modifier brightens whichever band the cursor is over. */}
       {dragState && (
         <>
           <div
@@ -821,12 +820,6 @@ export function Island({
             aria-hidden="true"
           >
             <span className="snap-zone__label">{t.overlayDropHide}</span>
-          </div>
-          <div
-            className={`snap-zone snap-zone--default${dragState.hoverZone === 'default' ? ' is-active' : ''}`}
-            aria-hidden="true"
-          >
-            <span className="snap-zone__label">{t.overlayDropDefault}</span>
           </div>
         </>
       )}

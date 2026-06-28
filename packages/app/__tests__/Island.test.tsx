@@ -1082,7 +1082,7 @@ class IslandTests {
         expect(island.classList.contains('island--corner-hint')).toBe(false)
       })
 
-      it('renders all three snap zones only while drag is engaged', () => {
+      it('renders the two edge snap zones only while drag is engaged', () => {
         const { container, rerender } = render(<Island {...IslandTests.makeProps({
           overlayMode: 'default', dragState: null,
         })} />)
@@ -1090,26 +1090,28 @@ class IslandTests {
 
         rerender(<Island {...IslandTests.makeProps({
           overlayMode: 'default',
-          dragState:   { fromMode: 'default', pointerX: 100, pointerY: 100, hoverZone: null },
+          dragState:   { fromMode: 'default', pointerX: 100, pointerY: 10, hoverZone: null },
         })} />)
-        expect(container.querySelector('.snap-zone--hide')).not.toBeNull()
+        // Horizontal-only drag: left band (corner) + right band (hide). The
+        // middle is plain default, so there is no painted center zone.
+        expect(container.querySelectorAll('.snap-zone').length).toBe(2)
         expect(container.querySelector('.snap-zone--corner')).not.toBeNull()
-        expect(container.querySelector('.snap-zone--default')).not.toBeNull()
+        expect(container.querySelector('.snap-zone--hide')).not.toBeNull()
+        expect(container.querySelector('.snap-zone--default')).toBeNull()
       })
 
-      it('marks the hovered snap zone with is-active', () => {
+      it('marks the hovered edge band with is-active', () => {
         const { container, rerender } = render(<Island {...IslandTests.makeProps({
-          dragState: { fromMode: 'default', pointerX: 720, pointerY: 30, hoverZone: 'top' },
+          dragState: { fromMode: 'default', pointerX: 20, pointerY: 10, hoverZone: 'corner' },
+        })} />)
+        expect(container.querySelector('.snap-zone--corner')!.classList.contains('is-active')).toBe(true)
+        expect(container.querySelector('.snap-zone--hide')!.classList.contains('is-active')).toBe(false)
+
+        rerender(<Island {...IslandTests.makeProps({
+          dragState: { fromMode: 'default', pointerX: 720, pointerY: 10, hoverZone: 'top' },
         })} />)
         expect(container.querySelector('.snap-zone--hide')!.classList.contains('is-active')).toBe(true)
         expect(container.querySelector('.snap-zone--corner')!.classList.contains('is-active')).toBe(false)
-        expect(container.querySelector('.snap-zone--default')!.classList.contains('is-active')).toBe(false)
-
-        rerender(<Island {...IslandTests.makeProps({
-          dragState: { fromMode: 'default', pointerX: 720, pointerY: 90, hoverZone: 'default' },
-        })} />)
-        expect(container.querySelector('.snap-zone--default')!.classList.contains('is-active')).toBe(true)
-        expect(container.querySelector('.snap-zone--hide')!.classList.contains('is-active')).toBe(false)
       })
 
       it('positions the pill at the cursor while dragging', () => {
