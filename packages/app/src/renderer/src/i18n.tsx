@@ -48,6 +48,11 @@ export interface Translations {
   apiSwitchRestarting:      string
   apiSwitchOpenNew:         string
   apiSwitchPickerLabel:     string
+  contextThresholdTitle:    string
+  contextThresholdHint:     string
+  contextCompact:           string
+  contextHandoff:           string
+  contextDismiss:           string
   // API session-row stats (Chunk E — balance + per-session usage)
   balance:    string
   thisWeek:   string
@@ -251,6 +256,11 @@ const en: Translations = {
   apiSwitchRestarting:      'Restarting…',
   apiSwitchOpenNew:         'Open a new session',
   apiSwitchPickerLabel:     'Custom APIs',
+  contextThresholdTitle:    'Context window filling up',
+  contextThresholdHint:     'Compact to summarize in place, or hand off to a fresh session.',
+  contextCompact:           'Compact',
+  contextHandoff:           'Hand off',
+  contextDismiss:           'Dismiss',
   balance:    'Balance',
   thisWeek:   'This week',
   // CLI
@@ -442,6 +452,11 @@ const zh: Translations = {
   apiSwitchRestarting:      '重启中…',
   apiSwitchOpenNew:         '开一个新会话',
   apiSwitchPickerLabel:     '自定义 API',
+  contextThresholdTitle:    '上下文窗口快满了',
+  contextThresholdHint:     '可以压缩（就地总结当前对话），或切换到一个干净的新会话。',
+  contextCompact:           '压缩',
+  contextHandoff:           '切换会话',
+  contextDismiss:           '关闭',
   balance:    '余额',
   thisWeek:   '本周',
   // CLI
@@ -633,6 +648,11 @@ const ko: Translations = {
   apiSwitchRestarting:      '재시작 중…',
   apiSwitchOpenNew:         '새 세션 열기',
   apiSwitchPickerLabel:     '사용자 정의 API',
+  contextThresholdTitle:    '컨텍스트 창이 가득 차고 있습니다',
+  contextThresholdHint:     '압축（현재 대화 요약）하거나 새 세션으로 핸드오프하세요.',
+  contextCompact:           '압축',
+  contextHandoff:           '핸드오프',
+  contextDismiss:           '닫기',
   balance:    '잔액',
   thisWeek:   '이번 주',
   // CLI

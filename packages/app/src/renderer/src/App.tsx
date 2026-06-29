@@ -5,6 +5,7 @@ import { ApiSwitchPopup } from './components/ApiSwitchPopup'
 import { CodexSwitchPopup } from './components/CodexSwitchPopup'
 import { NewSessionEnginePopup } from './components/NewSessionEnginePopup'
 import { QuitConfirmPopup } from './components/QuitConfirmPopup'
+import { ContextAlertPopup } from './components/ContextAlertPopup'
 import type { AppState, OverlayMode, Session, ActionType, SessionNotification, SessionStateUpdate, SessionMetricsUpdate, SessionRestored, CodexReasoningEffort, ClaudeReasoningEffort } from './types'
 
 // --- Overlay layout constants ----------------------------------------------
@@ -66,6 +67,7 @@ const POPUP_ENGINE_PICKER = 290   // .engine-picker-popup (title + hint + perm t
 const POPUP_API_SWITCH    = 230   // .api-switch-popup
 const POPUP_CODEX_SWITCH  = 240   // .codex-switch-popup (effort buttons row)
 const POPUP_QUIT_CONFIRM  = 180   // .quit-confirm-popup
+const POPUP_CONTEXT_ALERT = 200   // .api-switch-popup reuse (title + % + hint + 2 buttons)
 
 // Total pill window height for a given UI state. Returns the minimum
 // height the BrowserWindow must have so every visible element (pill +
@@ -82,6 +84,7 @@ function computePillHeight(opts: {
   pendingApiSwitch:         boolean
   pendingCodexSwitch:       boolean
   showQuitConfirm:          boolean
+  contextAlert:             boolean
 }): number {
   if (opts.remotePopupSessionId !== null) return 820
   const budget = notifBudget(opts.notification)
@@ -94,6 +97,7 @@ function computePillHeight(opts: {
   if (opts.pendingApiSwitch)       popupBudget = Math.max(popupBudget, POPUP_API_SWITCH)
   if (opts.pendingCodexSwitch)     popupBudget = Math.max(popupBudget, POPUP_CODEX_SWITCH)
   if (opts.showQuitConfirm)        popupBudget = Math.max(popupBudget, POPUP_QUIT_CONFIRM)
+  if (opts.contextAlert)           popupBudget = Math.max(popupBudget, POPUP_CONTEXT_ALERT)
   if (!opts.expanded && !opts.showModelPicker && budget === 0 && popupBudget === 0) {
     return PILL_HEIGHT_BASE
   }
@@ -237,6 +241,9 @@ export function App(): JSX.Element {
   const [newSessionBusy, setNewSessionBusy]   = useState(false)
   const [showQuitConfirm, setShowQuitConfirm] = useState(false)
   const [backgroundNotification, setBackgroundNotification] = useState<SessionNotification | null>(null)
+  // Real-context-% pressure alert (driven by statusLine, not a guess). Holds the
+  // session that crossed the threshold + its pct; null when no alert is showing.
+  const [contextAlert, setContextAlert] = useState<{ sessionId: number; pct: number } | null>(null)
   // Showing the Settings sub-panel inside the expanded panel. Lifted out of
   // Island.tsx so window-bounds computation in non-default overlay modes can
   // see it (otherwise the bounds effect would not know to budget the 840px
@@ -270,6 +277,12 @@ export function App(): JSX.Element {
   const [apiBalances, setApiBalances] = useState<Record<ApiProviderId, ApiBalanceSnapshot>>({} as Record<ApiProviderId, ApiBalanceSnapshot>)
   const [apiUsage,    setApiUsage]    = useState<Record<number, ApiUsageSnapshot>>({})
   const wrapperRef                            = useRef<HTMLDivElement>(null)
+  // Per-session last-fired context-alert band (0 none / 1 ≥85% / 2 ≥95%) for
+  // dedup, and a live mirror of activeId so the metrics listener (deps: []) can
+  // read the current active session without re-subscribing.
+  const contextAlertLevelRef                  = useRef<Map<number, number>>(new Map())
+  const activeIdRef                           = useRef<number | null>(null)
+  activeIdRef.current = activeId
   const pointerPositionRef                    = useRef<{ x: number; y: number } | null>(null)
 
   // mousemove fires at 60–120 Hz inside the island; without a guard, every
@@ -556,6 +569,7 @@ export function App(): JSX.Element {
       pendingApiSwitch:       pendingApiSwitch !== null,
       pendingCodexSwitch:     pendingCodexSwitch !== null,
       showQuitConfirm,
+      contextAlert:           contextAlert !== null,
     })
     // Default + top-hidden: window height = pill height (60 collapsed,
     // dynamic when expanded / picker open / notification budget added).
@@ -582,6 +596,7 @@ export function App(): JSX.Element {
     if (pendingApiSwitch !== null)       popupBudget = Math.max(popupBudget, POPUP_API_SWITCH)
     if (pendingCodexSwitch !== null)     popupBudget = Math.max(popupBudget, POPUP_CODEX_SWITCH)
     if (showQuitConfirm)                 popupBudget = Math.max(popupBudget, POPUP_QUIT_CONFIRM)
+    if (contextAlert !== null)           popupBudget = Math.max(popupBudget, POPUP_CONTEXT_ALERT)
     const popupGap = popupBudget > 0 ? 6 : 0
     let cornerHeight: number
     if (expanded || showModelPicker || remotePopupSessionId !== null) {
@@ -599,7 +614,7 @@ export function App(): JSX.Element {
       x: workArea.x, y: workArea.y,
       width: workArea.width, height: cornerHeight,
     }
-  }, [workArea, dragState, overlayMode, overlayPeek, expanded, showSettings, showModelPicker, overlayNotification, remotePopupSessionId, hasCornerHint, pendingEngineWorkspace, pendingApiSwitch, pendingCodexSwitch, showQuitConfirm])
+  }, [workArea, dragState, overlayMode, overlayPeek, expanded, showSettings, showModelPicker, overlayNotification, remotePopupSessionId, hasCornerHint, pendingEngineWorkspace, pendingApiSwitch, pendingCodexSwitch, showQuitConfirm, contextAlert])
 
   useEffect(() => {
     if (!targetBounds) return
@@ -1012,6 +1027,21 @@ export function App(): JSX.Element {
     const cleanup = window.ccc?.onSessionMetricsUpdated((update: SessionMetricsUpdate) => {
       if (update.model !== undefined) {
         setIsSwitchingModel(false)
+      }
+      // Context-pressure alert off the REAL statusLine %. Bands: 1 = ≥85%,
+      // 2 = ≥95%. Fire once per band increase, only for the active session;
+      // re-arm when context drops back below 80% (e.g. after a /compact).
+      if (update.contextPct !== undefined) {
+        const sid = update.sessionId
+        const pct = update.contextPct
+        const prevBand = contextAlertLevelRef.current.get(sid) ?? 0
+        const band = pct >= 0.95 ? 2 : pct >= 0.85 ? 1 : 0
+        if (pct < 0.80 && prevBand !== 0) {
+          contextAlertLevelRef.current.set(sid, 0)
+        } else if (band > prevBand) {
+          contextAlertLevelRef.current.set(sid, band)
+          if (sid === activeIdRef.current) setContextAlert({ sessionId: sid, pct })
+        }
       }
       setSessions(prev => prev.map(s => {
         if (s.id !== update.sessionId) return s
@@ -1658,6 +1688,15 @@ export function App(): JSX.Element {
           sessionCount={sessions.length}
           onConfirm={confirmQuit}
           onCancel={cancelQuitConfirm}
+        />
+      )}
+
+      {contextAlert && (
+        <ContextAlertPopup
+          pct={contextAlert.pct}
+          onCompact={() => { window.ccc?.injectConsoleText(contextAlert.sessionId, '/compact'); setContextAlert(null) }}
+          onHandoff={() => { window.ccc?.injectConsoleText(contextAlert.sessionId, '/handoff'); setContextAlert(null) }}
+          onDismiss={() => setContextAlert(null)}
         />
       )}
     </div>
