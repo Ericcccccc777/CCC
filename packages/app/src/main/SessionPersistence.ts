@@ -8,6 +8,10 @@ export interface PersistedSession {
   workspace:        string
   name:             string
   modelId:          string
+  // Last real statusLine model display name (e.g. "Opus 4.8"), so a session
+  // restored after a full app restart shows its true model without waiting
+  // for Claude Code to emit a fresh statusLine. See SessionRestored.model.
+  model?:           string
   innerPid:         number
   pidFile:          string
   statuslineScript: string

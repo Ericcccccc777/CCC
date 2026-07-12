@@ -598,6 +598,83 @@ class HookServerTimeoutTests {
         expect(sent).toEqual([])
       })
     })
+
+    // Regression: after Mac sleep / long idle / an app restart, a session that
+    // was rebuilt (removed + re-added) lost its model in the pill and showed
+    // "—" until a full restart. Root cause: the real statusLine display name
+    // lived ONLY in the renderer, fed by statusLine POSTs; a rebuilt session
+    // fell back to the launch alias / "" → "—" and never refilled while idle.
+    // HookServer now remembers the model (lastModel) so restore payloads carry
+    // it and the on-wake rebroadcast re-hydrates a blank session.
+    describe('model memory (blank-model-after-sleep fix)', () => {
+      let server:      HookServer
+      let metricsSent: SessionMetricsUpdate[]
+
+      beforeEach(async () => {
+        server = new HookServer(80)
+        metricsSent = []
+        const fakeWin = {
+          webContents: {
+            send: (channel: string, payload: unknown): void => {
+              if (channel === IPC.SESSION_METRICS_UPDATED) metricsSent.push(payload as SessionMetricsUpdate)
+            },
+          },
+          isDestroyed: (): boolean => false,
+        }
+        server.attachWindow(fakeWin as unknown as Parameters<HookServer['attachWindow']>[0])
+        await server.start()
+      })
+      afterEach(() => { server.stop() })
+
+      const fakeRes = { writeHead: (): void => { /* noop */ }, end: (): void => { /* noop */ } }
+      const handle = (sessionId: number, data: object): void => {
+        ;(server as unknown as {
+          handleStatusLine: (p: { sessionId: number; data: object }, res: object) => void
+        }).handleStatusLine({ sessionId, data }, fakeRes)
+      }
+
+      it('remembers the statusLine display_name and forwards it in metrics', () => {
+        handle(1, { model: { id: 'claude-opus-4-8', display_name: 'Opus 4.8' } })
+        expect(server.lastKnownModel(1)).toBe('Opus 4.8')
+        expect(metricsSent.at(-1)!.model).toBe('Opus 4.8')
+      })
+
+      it('falls back to the model id when display_name is absent', () => {
+        handle(2, { model: { id: 'claude-sonnet-5' } })
+        expect(server.lastKnownModel(2)).toBe('claude-sonnet-5')
+      })
+
+      it('does NOT forget the remembered model when a later statusLine omits it', () => {
+        handle(1, { model: { display_name: 'Opus 4.8' } })
+        handle(1, { model: {} })                                // resolves to undefined
+        handle(1, { context_window: { used_percentage: 12 } })  // no model key at all
+        expect(server.lastKnownModel(1)).toBe('Opus 4.8')
+      })
+
+      it('rebroadcastModels re-emits the cached model for every tracked session (on-wake recovery)', () => {
+        handle(1, { model: { display_name: 'Opus 4.8' } })
+        handle(2, { model: { display_name: 'Sonnet 5' } })
+        metricsSent.length = 0
+        server.rebroadcastModels()
+        expect(metricsSent).toEqual([
+          { sessionId: 1, model: 'Opus 4.8' },
+          { sessionId: 2, model: 'Sonnet 5' },
+        ])
+      })
+
+      it('seedModel primes the cache (used when restoring a persisted session cold)', () => {
+        server.seedModel(7, 'Fable 5')
+        expect(server.lastKnownModel(7)).toBe('Fable 5')
+        server.rebroadcastModels()
+        expect(metricsSent).toContainEqual({ sessionId: 7, model: 'Fable 5' })
+      })
+
+      it('stopTranscript forgets the remembered model even with no transcript watcher', () => {
+        handle(1, { model: { display_name: 'Opus 4.8' } })   // sets model, opens no transcript
+        server.stopTranscript(1)
+        expect(server.lastKnownModel(1)).toBeUndefined()
+      })
+    })
   }
 }
 

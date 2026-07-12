@@ -191,7 +191,10 @@ function sessionFromRestored(data: SessionRestored): Session {
   const now = Date.now()
   const model = data.mode === 'codex'
     ? data.codexModelId ?? data.modelId
-    : (data.apiModelId ?? data.modelId ?? '—')
+    // Prefer the real statusLine model the main process remembered (survives
+    // sleep / long idle / app restart); fall back to the API/launch id, then
+    // "—". Without this a rebuilt session shows "—" until the next statusLine.
+    : (data.model || data.apiModelId || data.modelId || '—')
   return {
     id:            data.sessionId,
     workspace:     data.workspace,
@@ -376,8 +379,15 @@ export function App(): JSX.Element {
       setSessions(prev => {
         const byId = new Map(prev.map(session => [session.id, session]))
         for (const restored of known) {
-          if (!byId.has(restored.sessionId)) {
+          const existing = byId.get(restored.sessionId)
+          if (!existing) {
             byId.set(restored.sessionId, sessionFromRestored(restored))
+          } else if (restored.model && (!existing.model || existing.model === '—')) {
+            // Session is still in the renderer but its model went blank (e.g. it
+            // was rebuilt after sleep before the main process re-surfaced the
+            // real model). Repair it from the now-known model so it recovers on
+            // the next focus/visibility tick — no app restart needed.
+            byId.set(restored.sessionId, { ...existing, model: restored.model })
           }
         }
         return [...byId.values()]
