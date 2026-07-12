@@ -46,6 +46,11 @@ export interface SessionRestored {
   workspace:    string
   name:         string
   modelId:      string
+  // Last real model display name seen on the statusLine (e.g. "Opus 4.8"),
+  // remembered by the main process so a session rebuilt after sleep / long
+  // idle / app restart shows its true model immediately instead of falling
+  // back to the launch alias or "—" while it waits for a fresh statusLine.
+  model?:       string
   mode:         SessionMode
   origin:       SessionOrigin
   capability:   SessionRecoveryCapability

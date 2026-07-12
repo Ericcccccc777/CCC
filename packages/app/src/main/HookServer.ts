@@ -31,6 +31,13 @@ export class HookServer {
   // Last lifecycle state pushed to the renderer, per session. Lets sweepIdle()
   // distinguish "stuck running" from "already done".
   private lastState       = new Map<number, SessionLifecycleState>()
+  // Last real model display name (e.g. "Opus 4.8") seen on this session's
+  // statusLine. The renderer normally holds the model, but a session rebuilt
+  // after sleep / long idle / app restart loses it and would show "—" until a
+  // fresh statusLine arrives (which never comes while the session is idle).
+  // Persisting it here — and echoing it into restore payloads — lets a rebuilt
+  // session show its true model immediately. See SessionRestored.model.
+  private lastModel       = new Map<number, string>()
   // Sessions whose AskUserQuestion popup timed out without a renderer answer.
   // Claude Code is now rendering the question in the terminal and waiting on
   // user input there. Until the next Stop event, transcript→streaming is
@@ -189,18 +196,51 @@ export class HookServer {
   }
 
   stopTranscript(sessionId: number): void {
+    // Clear the transcript watcher if one was started (a session may never get
+    // one — the watch only begins once a statusLine carries a transcript_path).
     const t = this.transcripts.get(sessionId)
-    if (!t) return
-    clearInterval(t.timer)
-    this.transcripts.delete(sessionId)
+    if (t) {
+      clearInterval(t.timer)
+      this.transcripts.delete(sessionId)
+    }
+    // Per-session bookkeeping is cleared unconditionally so nothing leaks for a
+    // session that never opened a transcript (e.g. torn down very early).
     this.lastDoneAt.delete(sessionId)
     this.lastActivityAt.delete(sessionId)
     this.lastState.delete(sessionId)
+    this.lastModel.delete(sessionId)
     this.terminalAwaiting.delete(sessionId)
     this.remoteSessions.delete(sessionId)
   }
 
   get serverPort(): number { return this.port }
+
+  // Last real model display name seen on this session's statusLine, if any.
+  // Used to re-hydrate the model of a session rebuilt after sleep / restart.
+  lastKnownModel(sessionId: number): string | undefined {
+    return this.lastModel.get(sessionId)
+  }
+
+  // Seed the model cache from a persisted session on restore, so the very
+  // first restore payload after an app restart already carries the real model
+  // (the cache is otherwise empty until the session emits a statusLine).
+  seedModel(sessionId: number, model: string): void {
+    if (model) this.lastModel.set(sessionId, model)
+  }
+
+  // Re-push the last-known model for every tracked session. Called on wake:
+  // a session whose model went blank in the renderer (rebuilt during sleep)
+  // is repainted at once, without waiting for a focus event or the next
+  // statusLine — which may never arrive while the session sits idle. This is
+  // the reliable recovery path, since the click-through overlay window can't
+  // count on focus/visibility events firing after the display wakes.
+  rebroadcastModels(): void {
+    for (const [sessionId, model] of this.lastModel) {
+      if (!model) continue
+      const metrics: SessionMetricsUpdate = { sessionId, model }
+      try { this.win?.webContents.send(IPC.SESSION_METRICS_UPDATED, metrics) } catch { /* window gone */ }
+    }
+  }
 
   private reply(res: http.ServerResponse, body: unknown): void {
     res.writeHead(200, { 'Content-Type': 'application/json' })
@@ -259,6 +299,9 @@ export class HookServer {
 
     const modelObj = data['model'] as { id?: string; display_name?: string } | undefined
     const model    = modelObj?.display_name ?? modelObj?.id
+    // Remember the real model so a rebuilt session can be re-hydrated without
+    // waiting for the next statusLine (see lastModel / lastKnownModel).
+    if (model) this.lastModel.set(sessionId, model)
 
     const cw       = data['context_window'] as {
       used_percentage?: number; context_window_size?: number

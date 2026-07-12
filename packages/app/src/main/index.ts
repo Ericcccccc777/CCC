@@ -289,11 +289,16 @@ class SessionManager {
   }
 
   private toRestoredPayload(sessionId: number, entry: SessionEntry): SessionRestored {
+    const model = this.hooks.lastKnownModel(sessionId)
     return {
       sessionId,
       workspace:   entry.workspace,
       name:        entry.name,
       modelId:     entry.modelId,
+      // Real statusLine model (e.g. "Opus 4.8") so a rebuilt session shows its
+      // true model at once instead of the launch alias / "—". Absent until the
+      // session has emitted at least one statusLine.
+      ...(model && { model }),
       mode:        entry.mode,
       origin:      entry.origin,
       capability:  entry.capability,
@@ -425,8 +430,12 @@ class SessionManager {
       }
       const innerPid = entry.innerPid
       if (!innerPid) continue
+      const model = this.hooks.lastKnownModel(id)
       result.push({
         id, workspace: entry.workspace, name: entry.name, modelId: entry.modelId,
+        // Carry the real statusLine model across an app restart so the restored
+        // session doesn't fall back to "—" while waiting for a fresh statusLine.
+        ...(model && { model }),
         innerPid, pidFile: entry.pidFile, statuslineScript: entry.statuslineScript,
         mode: entry.mode, origin: entry.origin, capability: entry.capability,
         ...(entry.apiProviderId && { apiProviderId: entry.apiProviderId }),
@@ -504,6 +513,10 @@ class SessionManager {
         ...(s.skipPermissions && { skipPermissions: s.skipPermissions }),
       }
       this.sessions.set(s.id, entry)
+      // Re-seed the model cache from the persisted session so the restore
+      // payload below carries the real model on a cold app start (the cache is
+      // empty until the session next emits a statusLine).
+      if (s.model) this.hooks.seedModel(s.id, s.model)
       // Re-register danger-mode sessions so the re-injected PreToolUse hook
       // keeps auto-allowing instead of popping permission requests.
       if (s.skipPermissions) this.hooks.registerFullAccessSession(s.id)
@@ -1398,14 +1411,16 @@ class AppWindow {
     powerMonitor.on('resume', () => {
       this.handlers?.beginRecoveryHold(RESUME_RECOVERY_HOLD_MS)
       const sessions = this.persistence.load()
-      if (sessions && sessions.length > 0) {
-        for (const delayMs of RESUME_RESTORE_DELAYS_MS) {
-          setTimeout(() => {
-            if (this.win && !this.win.isDestroyed()) {
-              this.handlers?.tryRestore(sessions, this.win)
-            }
-          }, delayMs)
-        }
+      for (const delayMs of RESUME_RESTORE_DELAYS_MS) {
+        setTimeout(() => {
+          if (!this.win || this.win.isDestroyed()) return
+          if (sessions && sessions.length > 0) this.handlers?.tryRestore(sessions, this.win)
+          // Repaint the real model on any session whose display went blank
+          // while asleep. Fires on each restore tick (not just when there are
+          // persisted sessions to re-attach) so a still-tracked session that
+          // lost its model recovers on wake without needing an app restart.
+          this.hookSrv.rebroadcastModels()
+        }, delayMs)
       }
       setTimeout(() => {
         this.handlers?.endRecoveryHold()
