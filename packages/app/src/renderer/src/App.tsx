@@ -195,17 +195,25 @@ function sessionFromRestored(data: SessionRestored): Session {
     // sleep / long idle / app restart); fall back to the API/launch id, then
     // "—". Without this a rebuilt session shows "—" until the next statusLine.
     : (data.model || data.apiModelId || data.modelId || '—')
+  // Prefer the last-known numbers the main process remembered (same survival
+  // path as `model`); fall back to 0/undefined for a session that has never
+  // emitted a statusLine. Without this a rebuilt idle session shows 0 for
+  // context / usage / weekly until a fresh statusLine — which never arrives
+  // while it sits idle.
+  const m = data.metrics ?? {}
   return {
     id:            data.sessionId,
     workspace:     data.workspace,
     modelId:       data.modelId,
     name:          data.name,
     model:         model || '—',
-    contextPct:    0,
-    usagePct:      0,
-    weeklyPct:     0,
-    reset5hAt:     0,
-    reset7dAt:     0,
+    contextPct:    m.contextPct ?? 0,
+    ...(m.contextTokens     !== undefined && { contextTokens:     m.contextTokens }),
+    ...(m.contextWindowSize !== undefined && { contextWindowSize: m.contextWindowSize }),
+    usagePct:      m.usagePct5h ?? 0,
+    weeklyPct:     m.usagePct7d ?? 0,
+    reset5hAt:     m.reset5hAt ?? 0,
+    reset7dAt:     m.reset7dAt ?? 0,
     state:         'idle',
     notification:  null,
     pendingPermissions: [],
@@ -381,12 +389,25 @@ export function App(): JSX.Element {
         for (const restored of known) {
           const existing = byId.get(restored.sessionId)
           if (!existing) {
+            // Fresh rebuild (e.g. renderer remounted after wake): seed model AND
+            // the last-known numbers the main process remembered, so it shows
+            // real values instead of 0. See sessionFromRestored / SessionRestored.metrics.
             byId.set(restored.sessionId, sessionFromRestored(restored))
           } else if (restored.model && (!existing.model || existing.model === '—')) {
             // Session is still in the renderer but its model went blank (e.g. it
             // was rebuilt after sleep before the main process re-surfaced the
             // real model). Repair it from the now-known model so it recovers on
             // the next focus/visibility tick — no app restart needed.
+            //
+            // NB: only `model` is repaired here, deliberately not the numbers.
+            // `model` has an unambiguous "unset" sentinel ('—'), so a repair
+            // can't clobber real data. The numbers have no such sentinel (0 is a
+            // legitimate value), so a focus-time repair off a possibly-stale
+            // listKnownSessions() snapshot could overwrite a fresher live
+            // statusLine. A still-present session already holds its last live
+            // numbers (they only reset on a full rebuild, handled above), and
+            // the on-wake rebroadcastSessionMetrics covers the rebuilt case —
+            // so no numeric repair is needed on this path.
             byId.set(restored.sessionId, { ...existing, model: restored.model })
           }
         }

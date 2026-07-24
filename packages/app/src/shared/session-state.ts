@@ -15,9 +15,13 @@ export interface SessionStateUpdate {
   message?:    string
 }
 
-export interface SessionMetricsUpdate {
-  sessionId:    number
-  model?:       string   // display_name from Claude Code
+// The numeric metrics that ride on a statusLine. Cached per-session in the main
+// process (HookServer.lastMetrics) and threaded through restore payloads +
+// persistence so a session rebuilt after sleep / long idle / app restart shows
+// its last-known numbers immediately instead of resetting to 0 while it waits
+// for a fresh statusLine — the exact analog of what SessionRestored.model does
+// for the model display name. See metrics-blank-after-sleep fix.
+export interface SessionMetrics {
   contextPct?:  number   // 0–1
   // Absolute context-window figures from statusLine `context_window`, so the UI
   // can show "137k / 1M" not just a percentage. contextWindowSize is per-model
@@ -33,6 +37,11 @@ export interface SessionMetricsUpdate {
   // these into countdown hints on hover.
   reset5hAt?:   number
   reset7dAt?:   number
+}
+
+export interface SessionMetricsUpdate extends SessionMetrics {
+  sessionId:    number
+  model?:       string   // display_name from Claude Code
 }
 
 export type SessionMode = 'anthropic' | 'api' | 'codex'
@@ -51,6 +60,12 @@ export interface SessionRestored {
   // idle / app restart shows its true model immediately instead of falling
   // back to the launch alias or "—" while it waits for a fresh statusLine.
   model?:       string
+  // Last-known numeric metrics (context %, 5h/7d usage, reset times), remembered
+  // by the main process for the same reason as `model`: a rebuilt idle session
+  // shows its real numbers immediately instead of 0 until the next statusLine
+  // (which never arrives while the session is idle). Absent until the session
+  // has emitted at least one statusLine carrying them.
+  metrics?:     SessionMetrics
   mode:         SessionMode
   origin:       SessionOrigin
   capability:   SessionRecoveryCapability

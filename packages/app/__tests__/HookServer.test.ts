@@ -651,11 +651,11 @@ class HookServerTimeoutTests {
         expect(server.lastKnownModel(1)).toBe('Opus 4.8')
       })
 
-      it('rebroadcastModels re-emits the cached model for every tracked session (on-wake recovery)', () => {
+      it('rebroadcastSessionMetrics re-emits the cached model for every tracked session (on-wake recovery)', () => {
         handle(1, { model: { display_name: 'Opus 4.8' } })
         handle(2, { model: { display_name: 'Sonnet 5' } })
         metricsSent.length = 0
-        server.rebroadcastModels()
+        server.rebroadcastSessionMetrics()
         expect(metricsSent).toEqual([
           { sessionId: 1, model: 'Opus 4.8' },
           { sessionId: 2, model: 'Sonnet 5' },
@@ -665,7 +665,7 @@ class HookServerTimeoutTests {
       it('seedModel primes the cache (used when restoring a persisted session cold)', () => {
         server.seedModel(7, 'Fable 5')
         expect(server.lastKnownModel(7)).toBe('Fable 5')
-        server.rebroadcastModels()
+        server.rebroadcastSessionMetrics()
         expect(metricsSent).toContainEqual({ sessionId: 7, model: 'Fable 5' })
       })
 
@@ -673,6 +673,89 @@ class HookServerTimeoutTests {
         handle(1, { model: { display_name: 'Opus 4.8' } })   // sets model, opens no transcript
         server.stopTranscript(1)
         expect(server.lastKnownModel(1)).toBeUndefined()
+      })
+    })
+
+    // Regression: the numeric metrics (context %, 5h/7d usage, reset times) had
+    // the exact bug the model fix above solved — they arrive only on statusLine
+    // POSTs and lived only in the renderer, so a session rebuilt after sleep /
+    // long idle / app restart reset them to 0 and stayed there while idle. The
+    // server now caches + re-hydrates them the same way it does the model.
+    describe('metrics memory (blank-metrics-after-sleep fix)', () => {
+      let server:      HookServer
+      let metricsSent: SessionMetricsUpdate[]
+
+      beforeEach(async () => {
+        server = new HookServer(80)
+        metricsSent = []
+        const fakeWin = {
+          webContents: {
+            send: (channel: string, payload: unknown): void => {
+              if (channel === IPC.SESSION_METRICS_UPDATED) metricsSent.push(payload as SessionMetricsUpdate)
+            },
+          },
+          isDestroyed: (): boolean => false,
+        }
+        server.attachWindow(fakeWin as unknown as Parameters<HookServer['attachWindow']>[0])
+        await server.start()
+      })
+      afterEach(() => { server.stop() })
+
+      const fakeRes = { writeHead: (): void => { /* noop */ }, end: (): void => { /* noop */ } }
+      const handle = (sessionId: number, data: object): void => {
+        ;(server as unknown as {
+          handleStatusLine: (p: { sessionId: number; data: object }, res: object) => void
+        }).handleStatusLine({ sessionId, data }, fakeRes)
+      }
+
+      it('remembers context %, usage, and reset times from the statusLine', () => {
+        handle(1, {
+          context_window: { used_percentage: 42, total_input_tokens: 100, total_output_tokens: 20, context_window_size: 200000 },
+          rate_limits: { five_hour: { used_percentage: 30 }, seven_day: { used_percentage: 55 } },
+        })
+        expect(server.lastKnownMetrics(1)).toEqual({
+          contextPct: 0.42, contextTokens: 120, contextWindowSize: 200000,
+          usagePct5h: 0.30, usagePct7d: 0.55,
+        })
+      })
+
+      it('does NOT forget remembered numbers when a later statusLine omits them', () => {
+        handle(1, { context_window: { used_percentage: 42 }, rate_limits: { five_hour: { used_percentage: 30 }, seven_day: { used_percentage: 55 } } })
+        handle(1, { model: { display_name: 'Opus 4.8' } })   // no context_window / rate_limits at all
+        expect(server.lastKnownMetrics(1)).toMatchObject({ contextPct: 0.42, usagePct5h: 0.30, usagePct7d: 0.55 })
+      })
+
+      it('rebroadcastSessionMetrics re-emits cached model + numbers together (on-wake recovery)', () => {
+        handle(1, {
+          model: { display_name: 'Opus 4.8' },
+          context_window: { used_percentage: 42 },
+          rate_limits: { five_hour: { used_percentage: 30 }, seven_day: { used_percentage: 55 } },
+        })
+        metricsSent.length = 0
+        server.rebroadcastSessionMetrics()
+        expect(metricsSent).toEqual([
+          { sessionId: 1, model: 'Opus 4.8', contextPct: 0.42, usagePct5h: 0.30, usagePct7d: 0.55 },
+        ])
+      })
+
+      it('rebroadcasts a session that has numbers but never sent a model', () => {
+        handle(9, { context_window: { used_percentage: 12 } })
+        metricsSent.length = 0
+        server.rebroadcastSessionMetrics()
+        expect(metricsSent).toEqual([{ sessionId: 9, contextPct: 0.12 }])
+      })
+
+      it('seedMetrics primes the cache (used when restoring a persisted session cold)', () => {
+        server.seedMetrics(7, { contextPct: 0.5, usagePct5h: 0.25, usagePct7d: 0.6 })
+        expect(server.lastKnownMetrics(7)).toEqual({ contextPct: 0.5, usagePct5h: 0.25, usagePct7d: 0.6 })
+        server.rebroadcastSessionMetrics()
+        expect(metricsSent).toContainEqual({ sessionId: 7, contextPct: 0.5, usagePct5h: 0.25, usagePct7d: 0.6 })
+      })
+
+      it('stopTranscript forgets the remembered numbers even with no transcript watcher', () => {
+        handle(1, { context_window: { used_percentage: 42 } })
+        server.stopTranscript(1)
+        expect(server.lastKnownMetrics(1)).toBeUndefined()
       })
     })
   }
