@@ -1,7 +1,7 @@
 import { app } from 'electron'
 import { existsSync, readFileSync, writeFileSync, unlinkSync } from 'fs'
 import { join } from 'path'
-import type { SessionMode, SessionOrigin, SessionRecoveryCapability } from '../shared/session-state'
+import type { SessionMetrics, SessionMode, SessionOrigin, SessionRecoveryCapability } from '../shared/session-state'
 
 export interface PersistedSession {
   id:               number
@@ -12,6 +12,10 @@ export interface PersistedSession {
   // restored after a full app restart shows its true model without waiting
   // for Claude Code to emit a fresh statusLine. See SessionRestored.model.
   model?:           string
+  // Last-known statusLine metrics (context %, 5h/7d usage, reset times) so a
+  // session restored after a full app restart shows its real numbers without
+  // waiting for a fresh statusLine. See SessionRestored.metrics.
+  metrics?:         SessionMetrics
   innerPid:         number
   pidFile:          string
   statuslineScript: string

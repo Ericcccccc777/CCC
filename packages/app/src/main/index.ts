@@ -290,6 +290,7 @@ class SessionManager {
 
   private toRestoredPayload(sessionId: number, entry: SessionEntry): SessionRestored {
     const model = this.hooks.lastKnownModel(sessionId)
+    const metrics = this.hooks.lastKnownMetrics(sessionId)
     return {
       sessionId,
       workspace:   entry.workspace,
@@ -299,6 +300,9 @@ class SessionManager {
       // true model at once instead of the launch alias / "—". Absent until the
       // session has emitted at least one statusLine.
       ...(model && { model }),
+      // Last-known numbers (context %, 5h/7d usage, reset times) so a rebuilt
+      // session shows them at once instead of 0 until the next statusLine.
+      ...(metrics && { metrics }),
       mode:        entry.mode,
       origin:      entry.origin,
       capability:  entry.capability,
@@ -431,11 +435,20 @@ class SessionManager {
       const innerPid = entry.innerPid
       if (!innerPid) continue
       const model = this.hooks.lastKnownModel(id)
+      const metrics = this.hooks.lastKnownMetrics(id)
       result.push({
         id, workspace: entry.workspace, name: entry.name, modelId: entry.modelId,
         // Carry the real statusLine model across an app restart so the restored
         // session doesn't fall back to "—" while waiting for a fresh statusLine.
         ...(model && { model }),
+        // Carry the last-known numbers across an app restart so the restored
+        // session shows them instead of 0 while waiting for a fresh statusLine.
+        // This is a point-in-time snapshot (taken at suspend / registry flush,
+        // not on every statusLine — statusLine fires too often to persist each
+        // time), so a hard crash between flushes may restore slightly stale
+        // numbers; the next live statusLine corrects them. Same snapshot
+        // semantics as `model` above.
+        ...(metrics && { metrics }),
         innerPid, pidFile: entry.pidFile, statuslineScript: entry.statuslineScript,
         mode: entry.mode, origin: entry.origin, capability: entry.capability,
         ...(entry.apiProviderId && { apiProviderId: entry.apiProviderId }),
@@ -513,10 +526,11 @@ class SessionManager {
         ...(s.skipPermissions && { skipPermissions: s.skipPermissions }),
       }
       this.sessions.set(s.id, entry)
-      // Re-seed the model cache from the persisted session so the restore
-      // payload below carries the real model on a cold app start (the cache is
-      // empty until the session next emits a statusLine).
+      // Re-seed the model + metrics caches from the persisted session so the
+      // restore payload below carries the real model and numbers on a cold app
+      // start (the caches are empty until the session next emits a statusLine).
       if (s.model) this.hooks.seedModel(s.id, s.model)
+      if (s.metrics) this.hooks.seedMetrics(s.id, s.metrics)
       // Re-register danger-mode sessions so the re-injected PreToolUse hook
       // keeps auto-allowing instead of popping permission requests.
       if (s.skipPermissions) this.hooks.registerFullAccessSession(s.id)
@@ -1415,11 +1429,12 @@ class AppWindow {
         setTimeout(() => {
           if (!this.win || this.win.isDestroyed()) return
           if (sessions && sessions.length > 0) this.handlers?.tryRestore(sessions, this.win)
-          // Repaint the real model on any session whose display went blank
-          // while asleep. Fires on each restore tick (not just when there are
-          // persisted sessions to re-attach) so a still-tracked session that
-          // lost its model recovers on wake without needing an app restart.
-          this.hookSrv.rebroadcastModels()
+          // Repaint the real model AND numbers (context %, usage, resets) on any
+          // session whose display went blank while asleep. Fires on each restore
+          // tick (not just when there are persisted sessions to re-attach) so a
+          // still-tracked session that lost them recovers on wake without an app
+          // restart.
+          this.hookSrv.rebroadcastSessionMetrics()
         }, delayMs)
       }
       setTimeout(() => {

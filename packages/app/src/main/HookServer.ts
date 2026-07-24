@@ -3,7 +3,7 @@ import { AddressInfo } from 'net'
 import { BrowserWindow, ipcMain } from 'electron'
 import { statSync, openSync, readSync, closeSync } from 'fs'
 import { IPC } from '../shared/ipc-channels'
-import type { SessionStateUpdate, SessionLifecycleState, ToolPermission, SessionMetricsUpdate } from '../shared/session-state'
+import type { SessionStateUpdate, SessionLifecycleState, ToolPermission, SessionMetrics, SessionMetricsUpdate } from '../shared/session-state'
 
 interface Pending {
   res:       http.ServerResponse
@@ -38,6 +38,15 @@ export class HookServer {
   // Persisting it here — and echoing it into restore payloads — lets a rebuilt
   // session show its true model immediately. See SessionRestored.model.
   private lastModel       = new Map<number, string>()
+  // Last-known numeric metrics (context %, 5h/7d usage, reset times) per session.
+  // Same rationale as lastModel: they arrive ONLY on statusLine POSTs and live
+  // ONLY in the renderer, so a session rebuilt after sleep / long idle / app
+  // restart resets them to 0 and — since statusLine only re-POSTs on activity —
+  // stays at 0 while idle. Caching them here, threading them into restore
+  // payloads + persistence, and re-broadcasting on wake re-hydrates a rebuilt
+  // session at once. Merged field-by-field (mergeMetrics) so a partial
+  // statusLine never wipes a previously-known value. See SessionRestored.metrics.
+  private lastMetrics     = new Map<number, SessionMetrics>()
   // Sessions whose AskUserQuestion popup timed out without a renderer answer.
   // Claude Code is now rendering the question in the terminal and waiting on
   // user input there. Until the next Stop event, transcript→streaming is
@@ -185,6 +194,8 @@ export class HookServer {
     this.lastDoneAt.clear()
     this.lastActivityAt.clear()
     this.lastState.clear()
+    this.lastModel.clear()
+    this.lastMetrics.clear()
     this.terminalAwaiting.clear()
     this.harnessSessions.clear()
     this.fullAccessSessions.clear()
@@ -209,6 +220,7 @@ export class HookServer {
     this.lastActivityAt.delete(sessionId)
     this.lastState.delete(sessionId)
     this.lastModel.delete(sessionId)
+    this.lastMetrics.delete(sessionId)
     this.terminalAwaiting.delete(sessionId)
     this.remoteSessions.delete(sessionId)
   }
@@ -228,17 +240,47 @@ export class HookServer {
     if (model) this.lastModel.set(sessionId, model)
   }
 
-  // Re-push the last-known model for every tracked session. Called on wake:
-  // a session whose model went blank in the renderer (rebuilt during sleep)
-  // is repainted at once, without waiting for a focus event or the next
-  // statusLine — which may never arrive while the session sits idle. This is
-  // the reliable recovery path, since the click-through overlay window can't
-  // count on focus/visibility events firing after the display wakes.
-  rebroadcastModels(): void {
-    for (const [sessionId, model] of this.lastModel) {
-      if (!model) continue
-      const metrics: SessionMetricsUpdate = { sessionId, model }
-      try { this.win?.webContents.send(IPC.SESSION_METRICS_UPDATED, metrics) } catch { /* window gone */ }
+  // Last-known numeric metrics for a session, if any. Used to re-hydrate the
+  // context %, usage, and reset times of a session rebuilt after sleep/restart.
+  lastKnownMetrics(sessionId: number): SessionMetrics | undefined {
+    return this.lastMetrics.get(sessionId)
+  }
+
+  // Seed the metrics cache from a persisted session on restore (analog of
+  // seedModel), so the first restore payload after an app restart already
+  // carries the real numbers instead of 0.
+  seedMetrics(sessionId: number, metrics: SessionMetrics): void {
+    this.mergeMetrics(sessionId, metrics)
+  }
+
+  // Merge only the *defined* fields of a metrics patch into the cache, so a
+  // statusLine that carries context but no rate_limits (or vice-versa) never
+  // clobbers a previously-known value with undefined. A patch with nothing
+  // defined is a no-op (never creates an empty entry).
+  private mergeMetrics(sessionId: number, patch: SessionMetrics): void {
+    const defined: SessionMetrics = {}
+    for (const [k, v] of Object.entries(patch)) {
+      if (v !== undefined) (defined as Record<string, unknown>)[k] = v
+    }
+    if (Object.keys(defined).length === 0) return
+    this.lastMetrics.set(sessionId, { ...this.lastMetrics.get(sessionId), ...defined })
+  }
+
+  // Re-push the last-known model AND numeric metrics for every tracked session.
+  // Called on wake: a session whose model/numbers went blank in the renderer
+  // (rebuilt during sleep) is repainted at once, without waiting for a focus
+  // event or the next statusLine — which may never arrive while the session
+  // sits idle. This is the reliable recovery path, since the click-through
+  // overlay window can't count on focus/visibility events firing after the
+  // display wakes.
+  rebroadcastSessionMetrics(): void {
+    const sessionIds = new Set<number>([...this.lastModel.keys(), ...this.lastMetrics.keys()])
+    for (const sessionId of sessionIds) {
+      const model   = this.lastModel.get(sessionId)
+      const metrics = this.lastMetrics.get(sessionId)
+      if (!model && !metrics) continue
+      const update: SessionMetricsUpdate = { sessionId, ...(model ? { model } : {}), ...metrics }
+      try { this.win?.webContents.send(IPC.SESSION_METRICS_UPDATED, update) } catch { /* window gone */ }
     }
   }
 
@@ -361,6 +403,9 @@ export class HookServer {
     const metrics: SessionMetricsUpdate = {
       sessionId, model, contextPct, contextTokens, contextWindowSize, usagePct5h, usagePct7d, reset5hAt, reset7dAt,
     }
+    // Remember the numbers so a session rebuilt after sleep/idle/restart can be
+    // re-hydrated immediately (see lastMetrics / rebroadcastSessionMetrics).
+    this.mergeMetrics(sessionId, { contextPct, contextTokens, contextWindowSize, usagePct5h, usagePct7d, reset5hAt, reset7dAt })
     this.win?.webContents.send(IPC.SESSION_METRICS_UPDATED, metrics)
 
     const transcriptPath = typeof data['transcript_path'] === 'string' ? data['transcript_path'] : null
