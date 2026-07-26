@@ -124,10 +124,10 @@ class ApiProvidersPanelTests {
           fireEvent.change(screen.getByPlaceholderText(/Paste your API key/i), { target: { value: 'sk-kimi' } })
           fireEvent.click(screen.getByText('Save'))
           await waitFor(() => expect(test).toHaveBeenCalledWith(
-            { id: 'kimi', modelId: 'kimi-k3' }, 'sk-kimi',
+            { id: 'kimi', modelId: 'kimi-k2.6' }, 'sk-kimi',
           ))
           await waitFor(() => expect(save).toHaveBeenCalledWith(
-            expect.objectContaining({ id: 'kimi', modelId: 'kimi-k3', verifiedAt: expect.any(Number) }), 'sk-kimi',
+            expect.objectContaining({ id: 'kimi', modelId: 'kimi-k2.6', verifiedAt: expect.any(Number) }), 'sk-kimi',
           ))
         })
       })

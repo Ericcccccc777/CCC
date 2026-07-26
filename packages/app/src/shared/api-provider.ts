@@ -83,11 +83,16 @@ export const API_PROVIDERS: Record<ApiProviderId, ApiProviderDescriptor> = {
     // Anthropic-compatible endpoint lives under /anthropic (Claude Code reads
     // ANTHROPIC_AUTH_TOKEN as the Bearer key).
     baseUrl: 'https://api.moonshot.cn/anthropic',
+    // .cn model ids verified 2026-07-26 against the api.moonshot.cn catalog.
+    // Default is kimi-k2.6 (latest stable): kimi-k3 launched 2026-07-16 and
+    // Moonshot suspended new access under capacity load, so it 404s on most
+    // accounts — it's listed last for accounts that do have it.
     models: [
-      { id: 'kimi-k3',                label: 'kimi-k3' },
-      { id: 'kimi-k2-0905-preview',   label: 'kimi-k2-0905-preview' },
-      { id: 'kimi-k2-turbo-preview',  label: 'kimi-k2-turbo-preview' },
-      { id: 'kimi-latest',            label: 'kimi-latest' },
+      { id: 'kimi-k2.6',            label: 'kimi-k2.6' },
+      { id: 'kimi-k2.7-code',       label: 'kimi-k2.7-code' },
+      { id: 'kimi-k2.5',            label: 'kimi-k2.5' },
+      { id: 'kimi-k2-0905-preview', label: 'kimi-k2-0905-preview' },
+      { id: 'kimi-k3',              label: 'kimi-k3' },
     ],
     // GET https://api.moonshot.cn/v1/users/me/balance →
     //   { code, data: { available_balance, voucher_balance, cash_balance }, status }

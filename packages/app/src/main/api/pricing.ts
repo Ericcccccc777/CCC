@@ -44,40 +44,51 @@ export const DEEPSEEK_PRICING: readonly ModelPricing[] = [
 ] as const
 
 // Kimi / Moonshot — approximate USD-per-1M rates (Moonshot bills CNY on
-// platform.moonshot.cn; these track the published international rates so the
+// platform.moonshot.cn; these track the published api.moonshot.cn rates so the
 // cost badge is a rough indicator, same as DeepSeek). An unlisted model just
-// resolves to cost 0 — harmless — so this table only needs the common ids.
-// Sources: platform.kimi.ai pricing, verified 2026-07-25.
+// resolves to cost 0 — harmless. Rates verified 2026-07-26.
 export const KIMI_PRICING: readonly ModelPricing[] = [
   {
-    modelId:            'kimi-k3',
-    inputPerMillion:    3.0,
-    cacheHitPerMillion: 0.30,
-    outputPerMillion:   15.0,
+    modelId:            'kimi-k2.6',
+    inputPerMillion:    0.95,
+    cacheHitPerMillion: 0.19,
+    outputPerMillion:   4.0,
+    contextWindow:      0,
+  },
+  {
+    modelId:            'kimi-k2.7-code',
+    inputPerMillion:    0.95,
+    cacheHitPerMillion: 0.19,
+    outputPerMillion:   4.0,
+    contextWindow:      0,
+  },
+  {
+    modelId:            'kimi-k2.5',
+    inputPerMillion:    0.60,
+    cacheHitPerMillion: 0.15,
+    outputPerMillion:   3.0,
     contextWindow:      0,
   },
   {
     modelId:            'kimi-k2-0905-preview',
     inputPerMillion:    0.60,
     cacheHitPerMillion: 0.15,
-    outputPerMillion:   2.50,
+    outputPerMillion:   3.0,
     contextWindow:      0,
   },
   {
-    // Turbo is the higher-throughput K2 variant and prices above the standard
-    // preview; approximate until Moonshot publishes a stable USD rate.
     modelId:            'kimi-k2-turbo-preview',
-    inputPerMillion:    1.15,
-    cacheHitPerMillion: 0.29,
-    outputPerMillion:   4.60,
+    inputPerMillion:    2.0,
+    cacheHitPerMillion: 0.50,
+    outputPerMillion:   10.0,
     contextWindow:      0,
   },
   {
-    // Rolling alias to the latest Kimi; priced at the K2 standard tier.
-    modelId:            'kimi-latest',
-    inputPerMillion:    0.60,
-    cacheHitPerMillion: 0.15,
-    outputPerMillion:   2.50,
+    // Frontier model (1M context); may be capacity-gated on many accounts.
+    modelId:            'kimi-k3',
+    inputPerMillion:    3.0,
+    cacheHitPerMillion: 0.30,
+    outputPerMillion:   15.0,
     contextWindow:      0,
   },
 ] as const
