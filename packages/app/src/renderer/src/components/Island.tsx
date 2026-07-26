@@ -150,11 +150,17 @@ function ModelPickerStrip({ selectedModelId, onSelect, variant, mode, apiProvide
              which provider's models the rows below show, so the API section
              stays short instead of stacking every provider's chips. */}
           {verifiedProviders.length > 1 && (
-            <div className="api-provider-tabs" role="tablist" aria-label={t.apiSwitchPickerLabel}>
+            <div
+              className="cli-panel__switch model-picker-api-switch"
+              role="tablist"
+              aria-label={t.apiSwitchPickerLabel}
+              style={{ gridTemplateColumns: `repeat(${verifiedProviders.length}, 1fr)` }}
+            >
               {verifiedProviders.map(p => (
                 <button
                   key={p.id}
-                  className={`api-provider-tab${activeApiProvider.id === p.id ? ' api-provider-tab--selected' : ''}`}
+                  className={`cli-panel__tab${activeApiProvider.id === p.id ? ' is-active' : ''}`}
+                  type="button"
                   role="tab"
                   aria-selected={activeApiProvider.id === p.id}
                   onClick={() => setApiTab(p.id)}

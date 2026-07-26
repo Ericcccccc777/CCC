@@ -25,11 +25,14 @@ type Status =
   | { kind: 'ok',    message: string }
   | { kind: 'error', message: string }
 
-// One card per registered provider (DeepSeek, Kimi, …). Each owns its own
-// add/edit form + status so operating on one provider never disturbs another.
+// Header switch (DeepSeek | Kimi) over a sliding viewport — the same shape as
+// the CLI panel's Claude Code | Codex switch, so the two Settings sections
+// read as one system. Only the selected provider's card is on screen; both
+// stay mounted in the track so their form state survives a tab switch.
 export function ApiProvidersPanel({ list, save, remove, test }: ApiProvidersPanelProps): JSX.Element {
   const t = useLang()
   const [providers, setProviders] = useState<ApiProviderListEntry[]>([])
+  const [activeId,  setActiveId]  = useState<ApiProviderId>(API_PROVIDER_IDS[0])
 
   const reload = async (): Promise<void> => {
     const r = await list()
@@ -38,24 +41,60 @@ export function ApiProvidersPanel({ list, save, remove, test }: ApiProvidersPane
 
   useEffect(() => { void reload() }, [])
 
+  const ids = API_PROVIDER_IDS
+  const activeIndex = Math.max(0, ids.indexOf(activeId))
+
   return (
-    <div className="settings-api-section">
-      <span className="settings-label">{t.api}</span>
-      {/* Providers sit side by side (not stacked) so the Settings panel stays
-          short — the expanded island can otherwise run off the bottom of the
-          screen with settings + model picker both open. */}
-      <div className="api-provider-cards">
-        {API_PROVIDER_IDS.map(id => (
-          <ProviderCard
-            key={id}
-            descriptor={apiProviderDescriptor(id)}
-            entry={providers.find(p => p.id === id) ?? null}
-            save={save}
-            remove={remove}
-            test={test}
-            onChanged={reload}
-          />
-        ))}
+    <div className="settings-api-section cli-panel">
+      <div className="cli-panel__header">
+        <span className="settings-label">{t.api}</span>
+        <div
+          className="cli-panel__switch"
+          role="tablist"
+          aria-label={t.api}
+          style={{ gridTemplateColumns: `repeat(${ids.length}, 1fr)` }}
+        >
+          {ids.map(id => (
+            <button
+              key={id}
+              className={`cli-panel__tab${activeId === id ? ' is-active' : ''}`}
+              type="button"
+              role="tab"
+              aria-selected={activeId === id}
+              onClick={() => setActiveId(id)}
+            >
+              {apiProviderDescriptor(id).label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="cli-panel__viewport">
+        <div
+          className="cli-panel__track"
+          style={{
+            width:     `${ids.length * 100}%`,
+            transform: `translateX(-${activeIndex * (100 / ids.length)}%)`,
+          }}
+        >
+          {ids.map(id => (
+            <section
+              key={id}
+              className="cli-panel__page"
+              role="tabpanel"
+              style={{ flex: `0 0 ${100 / ids.length}%` }}
+            >
+              <ProviderCard
+                descriptor={apiProviderDescriptor(id)}
+                entry={providers.find(p => p.id === id) ?? null}
+                save={save}
+                remove={remove}
+                test={test}
+                onChanged={reload}
+              />
+            </section>
+          ))}
+        </div>
       </div>
     </div>
   )
@@ -70,6 +109,8 @@ interface ProviderCardProps {
   onChanged:  () => Promise<void>
 }
 
+// A single provider's key/test/remove card. No provider-name title — the
+// header switch already identifies which provider this page belongs to.
 function ProviderCard({ descriptor, entry, save, remove, test, onChanged }: ProviderCardProps): JSX.Element {
   const t = useLang()
   const [formOpen, setFormOpen] = useState(false)
@@ -144,16 +185,15 @@ function ProviderCard({ descriptor, entry, save, remove, test, onChanged }: Prov
   return (
     <div className="api-provider-block" data-provider={descriptor.id}>
       {!entry && !formOpen && (
-        <div className="api-empty">
-          <span className="api-empty__hint">{descriptor.label}</span>
+        <div className="api-empty api-empty--solo">
+          {/* The switch tab already names the provider — just offer the add
+              action, centred, so the empty page isn't redundant. */}
           <button className="api-add-btn" onClick={openForm}>{addLabel}</button>
         </div>
       )}
 
       {entry && !formOpen && (
         <div className="api-card">
-          <div className="api-card__title">{descriptor.label}</div>
-
           <div className="api-card__row">
             <span className="api-card__label">{t.apiKey}</span>
             <span className="api-card__key">{entry.hasKey ? t.apiKeyMasked : '—'}</span>
@@ -177,8 +217,6 @@ function ProviderCard({ descriptor, entry, save, remove, test, onChanged }: Prov
 
       {formOpen && (
         <div className="api-form">
-          <div className="api-form__title">{descriptor.label}</div>
-
           <div className="api-form__row">
             <span className="api-card__label">{t.apiKey}</span>
             <input
