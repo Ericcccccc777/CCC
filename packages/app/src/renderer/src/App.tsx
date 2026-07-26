@@ -74,6 +74,16 @@ const POPUP_CONTEXT_ALERT = 200   // .api-switch-popup reuse (title + % + hint +
 // picker's height. 320 keeps settings-alone at the tuned 520+320 = 840.
 const SETTINGS_PANEL_BUDGET = 320
 
+// Model-picker height, broken out so it can grow with the API section. The
+// picker stacks: the Claude model row + effort row + divider (BASE), then an
+// optional provider switch row (2+ configured providers), then the active
+// provider's chip rows. A provider is budgeted for its WORST case (most rows)
+// because switching the API tab changes the row count without re-sizing —
+// Kimi's 5 models wrap to 2 rows, so its picker is taller than DeepSeek's 1.
+const MODEL_PICKER_BASE       = 160  // Claude row + effort + divider + padding
+const MODEL_PICKER_SWITCH_ROW = 40   // DeepSeek | Kimi segmented switch + gap
+const MODEL_PICKER_API_ROW    = 58   // one row of API model chips + gap
+
 // Total pill window height for a given UI state. Returns the minimum
 // height the BrowserWindow must have so every visible element (pill +
 // any popup stacked below it inside the wrapper) renders without being
@@ -90,6 +100,10 @@ function computePillHeight(opts: {
   pendingCodexSwitch:       boolean
   showQuitConfirm:          boolean
   contextAlert:             boolean
+  // Worst-case API chip rows shown in the picker (max across verified
+  // providers; 0 when none configured) + whether the provider switch is shown.
+  pickerApiRows:            number
+  pickerHasSwitch:          boolean
 }): number {
   if (opts.remotePopupSessionId !== null) return 820
   const budget = notifBudget(opts.notification)
@@ -107,12 +121,15 @@ function computePillHeight(opts: {
     return PILL_HEIGHT_BASE
   }
   let h = opts.expanded ? 520 : PILL_HEIGHT_BASE
-  // Picker has up to 3 rows (anthropic + deepseek + codex) plus padding.
-  // The pre-refactor MAIN_SET_HEIGHT had a 520 min-clamp that masked the
-  // need for an accurate number; now that the overlay window is sized
-  // exactly to content, the budget has to actually fit. 220 covers the
-  // worst case (all rows + per-chip name/desc) with a small buffer.
-  if (opts.showModelPicker) h += 220
+  // Picker height scales with the API section: BASE + (switch?) + N chip rows,
+  // where N is the tallest configured provider (Kimi's 5 models → 2 rows). A
+  // flat budget clipped the settings panel below the picker once a provider
+  // wrapped to a second row.
+  if (opts.showModelPicker) {
+    h += MODEL_PICKER_BASE
+      + (opts.pickerHasSwitch ? MODEL_PICKER_SWITCH_ROW : 0)
+      + opts.pickerApiRows * MODEL_PICKER_API_ROW
+  }
   // Additive (not Math.max): settings stacks BELOW the picker in the expanded
   // panel, so with both open the window must fit picker + settings, else the
   // bottom of the settings panel is clipped even though the screen has room.
@@ -146,7 +163,7 @@ function classifyHoverZone(x: number, wa: WorkArea): HoverZone {
   if (x >= wa.x + wa.width - EDGE_ZONE_W)   return 'top'
   return 'default'
 }
-import { apiProviderDescriptor, type ApiProviderId, type ApiProviderListEntry } from '../../shared/api-provider'
+import { API_PROVIDERS, apiProviderDescriptor, type ApiProviderId, type ApiProviderListEntry } from '../../shared/api-provider'
 import type { ApiBalanceSnapshot, ApiUsageSnapshot } from '../../shared/api-usage'
 import type { ClaudeCliStatus } from '../../shared/claude-cli'
 import type { CodexCliStatus } from '../../shared/codex-cli'
@@ -601,6 +618,13 @@ export function App(): JSX.Element {
     // un-painted area renders as the OS default background (white in
     // Light mode). A wide window with most of its pixels painted alpha=0
     // by the renderer chain avoids that path entirely.
+    // The picker shows one provider's models at a time but the user can switch
+    // the API tab without re-sizing, so budget for the tallest verified
+    // provider (most chip rows) + the switch when 2+ are configured.
+    const verifiedApi = apiProviders.filter(p => p.hasKey && p.verified)
+    const pickerApiRows = verifiedApi.length === 0
+      ? 0
+      : Math.max(...verifiedApi.map(p => Math.ceil((API_PROVIDERS[p.id]?.models.length ?? 0) / 4)))
     const h = computePillHeight({
       expanded, showSettings, showModelPicker,
       notification: overlayNotification, remotePopupSessionId,
@@ -609,6 +633,8 @@ export function App(): JSX.Element {
       pendingCodexSwitch:     pendingCodexSwitch !== null,
       showQuitConfirm,
       contextAlert:           contextAlert !== null,
+      pickerApiRows,
+      pickerHasSwitch:        verifiedApi.length > 1,
     })
     // Default + top-hidden: window height = pill height (60 collapsed,
     // dynamic when expanded / picker open / notification budget added).
@@ -653,7 +679,7 @@ export function App(): JSX.Element {
       x: workArea.x, y: workArea.y,
       width: workArea.width, height: cornerHeight,
     }
-  }, [workArea, dragState, overlayMode, overlayPeek, expanded, showSettings, showModelPicker, overlayNotification, remotePopupSessionId, hasCornerHint, pendingEngineWorkspace, pendingApiSwitch, pendingCodexSwitch, showQuitConfirm, contextAlert])
+  }, [workArea, dragState, overlayMode, overlayPeek, expanded, showSettings, showModelPicker, overlayNotification, remotePopupSessionId, hasCornerHint, pendingEngineWorkspace, pendingApiSwitch, pendingCodexSwitch, showQuitConfirm, contextAlert, apiProviders])
 
   useEffect(() => {
     if (!targetBounds) return
