@@ -49,8 +49,14 @@ interface ModelPickerStripProps {
 
 function ModelPickerStrip({ selectedModelId, onSelect, variant, mode, apiProviders, onSelectApi, codexModels, onSelectCodex, selectedEffort, onSelectEffort }: ModelPickerStripProps): JSX.Element {
   const t = useLang()
-  // Every provider with a verified, stored key gets its own row of model chips
-  // in the picker, so the user can switch a session to DeepSeek, Kimi, etc.
+  // Which provider's models the API section is currently showing. null until
+  // the user picks a tab, then it derives from selectedModelId / first verified
+  // (see activeApiProvider below). The strip remounts each time the picker
+  // opens, so this resets to "follow the active session" every open.
+  const [apiTab, setApiTab] = useState<ApiProviderId | null>(null)
+  // Every provider with a verified, stored key can be selected in the API tab
+  // switcher (DeepSeek / Kimi / …). Only ONE provider's models show at a time
+  // to keep the picker short.
   const verifiedProviders = apiProviders.filter(p => p.hasKey && p.verified)
   const effortLabel = (eff: ClaudeReasoningEffort): string =>
     eff === 'low'    ? t.codexEffortLow :
@@ -82,6 +88,14 @@ function ModelPickerStrip({ selectedModelId, onSelect, variant, mode, apiProvide
       </div>
     )
   }
+
+  // The provider whose models are shown right now: the user's tab choice, else
+  // the provider that owns the active model, else the first verified provider.
+  const activeApiProvider =
+    verifiedProviders.find(p => p.id === apiTab)
+    ?? verifiedProviders.find(p => apiProviderDescriptor(p.id).models.some(m => m.id === selectedModelId))
+    ?? verifiedProviders[0]
+    ?? null
 
   return (
     <div
@@ -129,33 +143,48 @@ function ModelPickerStrip({ selectedModelId, onSelect, variant, mode, apiProvide
         )
       })()}
 
-      {verifiedProviders.length > 0 && (
+      {activeApiProvider && (
         <>
           <div className="model-picker-divider" aria-hidden="true" />
-          {verifiedProviders.map(p => {
-            const descriptor = apiProviderDescriptor(p.id)
-            // Balance the chips into rows of ≤4 so a long list (Kimi) wraps
-            // evenly instead of overflowing one line.
-            return balancedRows(descriptor.models, 4).map((row, ri) => (
-              <div className="model-picker-custom-row" key={`${p.id}-${ri}`}>
-                {row.map(m => {
-                  const shortModel = stripProviderPrefix(m.id, p.id)
-                  return (
-                    <button
-                      key={m.id}
-                      className={`model-chip model-chip--api${selectedModelId === m.id ? ' model-chip--selected' : ''}`}
-                      aria-pressed={selectedModelId === m.id}
-                      onClick={() => onSelectApi(p.id, m.id)}
-                      aria-label={`${t.apiSwitchPickerLabel} — ${descriptor.label} ${shortModel}`}
-                    >
-                      <span className="model-chip__name">{shortModel}</span>
-                      <span className="model-chip__desc">{descriptor.label}</span>
-                    </button>
-                  )
-                })}
-              </div>
-            ))
-          })}
+          {/* Provider switcher — only when 2+ providers are configured. Picks
+             which provider's models the rows below show, so the API section
+             stays short instead of stacking every provider's chips. */}
+          {verifiedProviders.length > 1 && (
+            <div className="api-provider-tabs" role="tablist" aria-label={t.apiSwitchPickerLabel}>
+              {verifiedProviders.map(p => (
+                <button
+                  key={p.id}
+                  className={`api-provider-tab${activeApiProvider.id === p.id ? ' api-provider-tab--selected' : ''}`}
+                  role="tab"
+                  aria-selected={activeApiProvider.id === p.id}
+                  onClick={() => setApiTab(p.id)}
+                >
+                  {apiProviderDescriptor(p.id).label}
+                </button>
+              ))}
+            </div>
+          )}
+          {/* Balance the active provider's chips into rows of ≤4 so a long list
+             (Kimi) wraps evenly instead of overflowing one line. */}
+          {balancedRows(apiProviderDescriptor(activeApiProvider.id).models, 4).map((row, ri) => (
+            <div className="model-picker-custom-row" key={`${activeApiProvider.id}-${ri}`}>
+              {row.map(m => {
+                const shortModel = stripProviderPrefix(m.id, activeApiProvider.id)
+                return (
+                  <button
+                    key={m.id}
+                    className={`model-chip model-chip--api${selectedModelId === m.id ? ' model-chip--selected' : ''}`}
+                    aria-pressed={selectedModelId === m.id}
+                    onClick={() => onSelectApi(activeApiProvider.id, m.id)}
+                    aria-label={`${t.apiSwitchPickerLabel} — ${apiProviderDescriptor(activeApiProvider.id).label} ${shortModel}`}
+                  >
+                    <span className="model-chip__name">{shortModel}</span>
+                    <span className="model-chip__desc">{apiProviderDescriptor(activeApiProvider.id).label}</span>
+                  </button>
+                )
+              })}
+            </div>
+          ))}
         </>
       )}
     </div>

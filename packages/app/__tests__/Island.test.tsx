@@ -689,18 +689,42 @@ class IslandTests {
           expect(onSelectApiModel).toHaveBeenCalledWith('kimi', 'kimi-k2.6')
         })
 
-        it('splits each verified provider into its own balanced rows (DeepSeek 2 → 1 row, Kimi 5 → 2 rows)', () => {
+        it('shows a DeepSeek|Kimi tab switcher for 2+ providers and swaps rows on tab click', () => {
+          const onSelectApiModel = vi.fn()
           const { container } = render(<Island {...IslandTests.makeProps({
             showModelPicker: true,
             apiProviders: [
               { id: 'deepseek', modelId: 'deepseek-v4-flash', hasKey: true, verified: true },
               { id: 'kimi',     modelId: 'kimi-k2.6',         hasKey: true, verified: true },
             ],
+            onSelectApiModel,
           })} />)
-          // DeepSeek 2 models → [2] = 1 row; Kimi 5 → [3,2] = 2 rows; total 3.
-          expect(container.querySelectorAll('.model-picker-custom-row').length).toBe(3)
+          // Both tabs present; DeepSeek is the default (the active model is a
+          // Claude model owned by neither), so only its single row shows and
+          // Kimi's chips are hidden.
+          expect(screen.getByRole('tab', { name: 'DeepSeek' })).toBeDefined()
+          expect(screen.getByRole('tab', { name: 'Kimi' })).toBeDefined()
           expect(screen.getByText('v4-flash')).toBeDefined()
+          expect(container.querySelectorAll('.model-picker-custom-row').length).toBe(1)
+          expect(screen.queryByText('k2.6')).toBeNull()
+
+          // Switch to the Kimi tab → its 5 models show as 2 balanced rows;
+          // DeepSeek's chips disappear.
+          fireEvent.click(screen.getByRole('tab', { name: 'Kimi' }))
+          expect(container.querySelectorAll('.model-picker-custom-row').length).toBe(2)
           expect(screen.getByText('k2.6')).toBeDefined()
+          expect(screen.queryByText('v4-flash')).toBeNull()
+          fireEvent.click(screen.getByText('k2.6'))
+          expect(onSelectApiModel).toHaveBeenCalledWith('kimi', 'kimi-k2.6')
+        })
+
+        it('shows NO provider tabs when only one provider is configured', () => {
+          render(<Island {...IslandTests.makeProps({
+            showModelPicker: true,
+            apiProviders: [{ id: 'deepseek', modelId: 'deepseek-v4-flash', hasKey: true, verified: true }],
+          })} />)
+          expect(screen.queryByRole('tab')).toBeNull()
+          expect(screen.getByText('v4-flash')).toBeDefined()
         })
       })
 

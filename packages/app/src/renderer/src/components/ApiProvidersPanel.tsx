@@ -41,17 +41,22 @@ export function ApiProvidersPanel({ list, save, remove, test }: ApiProvidersPane
   return (
     <div className="settings-api-section">
       <span className="settings-label">{t.api}</span>
-      {API_PROVIDER_IDS.map(id => (
-        <ProviderCard
-          key={id}
-          descriptor={apiProviderDescriptor(id)}
-          entry={providers.find(p => p.id === id) ?? null}
-          save={save}
-          remove={remove}
-          test={test}
-          onChanged={reload}
-        />
-      ))}
+      {/* Providers sit side by side (not stacked) so the Settings panel stays
+          short — the expanded island can otherwise run off the bottom of the
+          screen with settings + model picker both open. */}
+      <div className="api-provider-cards">
+        {API_PROVIDER_IDS.map(id => (
+          <ProviderCard
+            key={id}
+            descriptor={apiProviderDescriptor(id)}
+            entry={providers.find(p => p.id === id) ?? null}
+            save={save}
+            remove={remove}
+            test={test}
+            onChanged={reload}
+          />
+        ))}
+      </div>
     </div>
   )
 }
