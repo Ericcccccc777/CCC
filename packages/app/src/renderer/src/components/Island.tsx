@@ -134,9 +134,11 @@ function ModelPickerStrip({ selectedModelId, onSelect, variant, mode, apiProvide
           <div className="model-picker-divider" aria-hidden="true" />
           {verifiedProviders.map(p => {
             const descriptor = apiProviderDescriptor(p.id)
-            return (
-              <div className="model-picker-custom-row" key={p.id}>
-                {descriptor.models.map(m => {
+            // Balance the chips into rows of ≤4 so a long list (Kimi) wraps
+            // evenly instead of overflowing one line.
+            return balancedRows(descriptor.models, 4).map((row, ri) => (
+              <div className="model-picker-custom-row" key={`${p.id}-${ri}`}>
+                {row.map(m => {
                   const shortModel = stripProviderPrefix(m.id, p.id)
                   return (
                     <button
@@ -152,7 +154,7 @@ function ModelPickerStrip({ selectedModelId, onSelect, variant, mode, apiProvide
                   )
                 })}
               </div>
-            )
+            ))
           })}
         </>
       )}
@@ -177,6 +179,26 @@ function shortName(model: string): string {
 function stripProviderPrefix(modelId: string, providerId: string): string {
   const prefix = `${providerId}-`
   return modelId.startsWith(prefix) ? modelId.slice(prefix.length) : modelId
+}
+
+// Split model chips into rows of at most `maxPerRow`, balancing the counts so
+// the rows are as even as possible (fuller rows first). rows = ceil(n / max):
+//   4 → [4]   5 → [3,2]   6 → [3,3]   7 → [4,3]   8 → [4,4]   9 → [3,3,3]
+// Keeps a long provider list (e.g. Kimi's) from overflowing one line.
+export function balancedRows<T>(items: readonly T[], maxPerRow: number): T[][] {
+  const n = items.length
+  if (n === 0) return []
+  const rows  = Math.ceil(n / maxPerRow)
+  const base  = Math.floor(n / rows)
+  const extra = n % rows
+  const out: T[][] = []
+  let i = 0
+  for (let r = 0; r < rows; r++) {
+    const size = base + (r < extra ? 1 : 0)
+    out.push(items.slice(i, i + size))
+    i += size
+  }
+  return out
 }
 
 // "3h 12m" / "2d 3h 45m" / "8m" — coarse countdown for rate-limit reset

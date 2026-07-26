@@ -670,8 +670,11 @@ body {
  * of brand colour and a fixed minimum width so a single button still
  * feels deliberate (not a stray click target). */
 .model-chip--api {
-  flex: 0 0 auto;
-  min-width: 130px;
+  /* Flexible so up to 4 chips share a row without overflowing the pill width
+     (the row is split to ≤4 in Island's balancedRows). Was a fixed 130px,
+     which overflowed once a provider (Kimi) offered 5+ models. */
+  flex: 1 1 0;
+  min-width: 0;
   border-color: rgba(120,180,220,0.30);
   background: rgba(120,180,220,0.06);
 }

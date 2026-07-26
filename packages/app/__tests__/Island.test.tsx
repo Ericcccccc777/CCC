@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
-import { Island, MODELS_INFO, formatCountdown, shouldSuppressNotifPopup } from '@renderer/components/Island'
+import { Island, MODELS_INFO, formatCountdown, shouldSuppressNotifPopup, balancedRows } from '@renderer/components/Island'
 import type { Session, AppState, ActionType } from '@renderer/types'
 
 const DEFAULT_SESSION: Session = {
@@ -670,22 +670,26 @@ class IslandTests {
           expect(onSelectApiModel).toHaveBeenCalledWith('deepseek', 'deepseek-v4-pro')
         })
 
-        it('renders a Kimi provider row (prefix stripped) and fires onSelectApiModel with the full kimi id', () => {
+        it('renders Kimi chips (prefix stripped) split into balanced rows of ≤4 and fires the full kimi id', () => {
           const onSelectApiModel = vi.fn()
           const { container } = render(<Island {...IslandTests.makeProps({
             showModelPicker: true,
             apiProviders: [{ id: 'kimi', modelId: 'kimi-k2.6', hasKey: true, verified: true }],
             onSelectApiModel,
           })} />)
-          expect(container.querySelectorAll('.model-picker-custom-row').length).toBe(1)
+          // Kimi ships 5 models → balanced into 2 rows of 3 + 2.
+          const rows = container.querySelectorAll('.model-picker-custom-row')
+          expect(rows.length).toBe(2)
+          expect(rows[0].querySelectorAll('.model-chip--api').length).toBe(3)
+          expect(rows[1].querySelectorAll('.model-chip--api').length).toBe(2)
           expect(screen.getByText('k2.6')).toBeDefined()
           expect(screen.queryByText('kimi-k2.6')).toBeNull()
-          expect(screen.getAllByText('Kimi').length).toBeGreaterThan(0)
+          expect(screen.getAllByText('Kimi').length).toBe(5)
           fireEvent.click(screen.getByText('k2.6'))
           expect(onSelectApiModel).toHaveBeenCalledWith('kimi', 'kimi-k2.6')
         })
 
-        it('renders one custom-API row per verified provider (DeepSeek + Kimi)', () => {
+        it('splits each verified provider into its own balanced rows (DeepSeek 2 → 1 row, Kimi 5 → 2 rows)', () => {
           const { container } = render(<Island {...IslandTests.makeProps({
             showModelPicker: true,
             apiProviders: [
@@ -693,7 +697,8 @@ class IslandTests {
               { id: 'kimi',     modelId: 'kimi-k2.6',         hasKey: true, verified: true },
             ],
           })} />)
-          expect(container.querySelectorAll('.model-picker-custom-row').length).toBe(2)
+          // DeepSeek 2 models → [2] = 1 row; Kimi 5 → [3,2] = 2 rows; total 3.
+          expect(container.querySelectorAll('.model-picker-custom-row').length).toBe(3)
           expect(screen.getByText('v4-flash')).toBeDefined()
           expect(screen.getByText('k2.6')).toBeDefined()
         })
@@ -1025,6 +1030,26 @@ class IslandTests {
       })
       it('>= 1d → "Nd Mh Pm"', () => {
         expect(formatCountdown(NOW + (2 * 24 * 60 + 3 * 60 + 45) * 60_000, NOW)).toBe('2d 3h 45m')
+      })
+    })
+
+    describe('balancedRows (model-chip wrapping)', () => {
+      const sizes = (n: number): number[] =>
+        balancedRows(Array.from({ length: n }, (_, i) => i), 4).map(r => r.length)
+      it('caps rows at 4 and balances counts (fuller rows first)', () => {
+        expect(sizes(1)).toEqual([1])
+        expect(sizes(4)).toEqual([4])
+        expect(sizes(5)).toEqual([3, 2])
+        expect(sizes(6)).toEqual([3, 3])
+        expect(sizes(7)).toEqual([4, 3])
+        expect(sizes(8)).toEqual([4, 4])
+        expect(sizes(9)).toEqual([3, 3, 3])
+      })
+      it('returns no rows for an empty list', () => {
+        expect(balancedRows([], 4)).toEqual([])
+      })
+      it('preserves order across the split', () => {
+        expect(balancedRows(['a', 'b', 'c', 'd', 'e'], 4)).toEqual([['a', 'b', 'c'], ['d', 'e']])
       })
     })
 
