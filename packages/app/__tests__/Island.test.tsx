@@ -650,36 +650,39 @@ class IslandTests {
           })} />)
           expect(container.querySelector('.model-picker-divider')).not.toBeNull()
           expect(container.querySelector('.model-picker-custom-row')).not.toBeNull()
-          // Chip name = the raw model id; the provider label ("DeepSeek") is the
-          // sub-text, once per chip.
-          expect(screen.getByText('deepseek-v4-flash')).toBeDefined()
-          expect(screen.getByText('deepseek-v4-pro')).toBeDefined()
+          // Chip name = the model id WITHOUT the provider prefix; the provider
+          // label ("DeepSeek") is the sub-text, once per chip.
+          expect(screen.getByText('v4-flash')).toBeDefined()
+          expect(screen.getByText('v4-pro')).toBeDefined()
+          expect(screen.queryByText('deepseek-v4-flash')).toBeNull()
           expect(screen.getAllByText('DeepSeek').length).toBe(2)
         })
 
-        it('clicking a DeepSeek model chip fires onSelectApiModel(providerId, modelId)', () => {
+        it('clicking a DeepSeek model chip fires onSelectApiModel(providerId, full modelId)', () => {
           const onSelectApiModel = vi.fn()
           render(<Island {...IslandTests.makeProps({
             showModelPicker: true,
             apiProviders: [{ id: 'deepseek', modelId: 'deepseek-v4-pro', hasKey: true, verified: true }],
             onSelectApiModel,
           })} />)
-          fireEvent.click(screen.getByText('deepseek-v4-pro'))
+          // Click the shortened label; the FULL id is still what gets sent.
+          fireEvent.click(screen.getByText('v4-pro'))
           expect(onSelectApiModel).toHaveBeenCalledWith('deepseek', 'deepseek-v4-pro')
         })
 
-        it('renders a Kimi provider row and fires onSelectApiModel with the kimi id', () => {
+        it('renders a Kimi provider row (prefix stripped) and fires onSelectApiModel with the full kimi id', () => {
           const onSelectApiModel = vi.fn()
           const { container } = render(<Island {...IslandTests.makeProps({
             showModelPicker: true,
-            apiProviders: [{ id: 'kimi', modelId: 'kimi-k3', hasKey: true, verified: true }],
+            apiProviders: [{ id: 'kimi', modelId: 'kimi-k2.6', hasKey: true, verified: true }],
             onSelectApiModel,
           })} />)
           expect(container.querySelectorAll('.model-picker-custom-row').length).toBe(1)
-          expect(screen.getByText('kimi-k3')).toBeDefined()
+          expect(screen.getByText('k2.6')).toBeDefined()
+          expect(screen.queryByText('kimi-k2.6')).toBeNull()
           expect(screen.getAllByText('Kimi').length).toBeGreaterThan(0)
-          fireEvent.click(screen.getByText('kimi-k3'))
-          expect(onSelectApiModel).toHaveBeenCalledWith('kimi', 'kimi-k3')
+          fireEvent.click(screen.getByText('k2.6'))
+          expect(onSelectApiModel).toHaveBeenCalledWith('kimi', 'kimi-k2.6')
         })
 
         it('renders one custom-API row per verified provider (DeepSeek + Kimi)', () => {
@@ -687,12 +690,12 @@ class IslandTests {
             showModelPicker: true,
             apiProviders: [
               { id: 'deepseek', modelId: 'deepseek-v4-flash', hasKey: true, verified: true },
-              { id: 'kimi',     modelId: 'kimi-k3',           hasKey: true, verified: true },
+              { id: 'kimi',     modelId: 'kimi-k2.6',         hasKey: true, verified: true },
             ],
           })} />)
           expect(container.querySelectorAll('.model-picker-custom-row').length).toBe(2)
-          expect(screen.getByText('deepseek-v4-flash')).toBeDefined()
-          expect(screen.getByText('kimi-k3')).toBeDefined()
+          expect(screen.getByText('v4-flash')).toBeDefined()
+          expect(screen.getByText('k2.6')).toBeDefined()
         })
       })
 

@@ -136,18 +136,21 @@ function ModelPickerStrip({ selectedModelId, onSelect, variant, mode, apiProvide
             const descriptor = apiProviderDescriptor(p.id)
             return (
               <div className="model-picker-custom-row" key={p.id}>
-                {descriptor.models.map(m => (
-                  <button
-                    key={m.id}
-                    className={`model-chip model-chip--api${selectedModelId === m.id ? ' model-chip--selected' : ''}`}
-                    aria-pressed={selectedModelId === m.id}
-                    onClick={() => onSelectApi(p.id, m.id)}
-                    aria-label={`${t.apiSwitchPickerLabel} — ${descriptor.label} ${m.label}`}
-                  >
-                    <span className="model-chip__name">{m.label}</span>
-                    <span className="model-chip__desc">{descriptor.label}</span>
-                  </button>
-                ))}
+                {descriptor.models.map(m => {
+                  const shortModel = stripProviderPrefix(m.id, p.id)
+                  return (
+                    <button
+                      key={m.id}
+                      className={`model-chip model-chip--api${selectedModelId === m.id ? ' model-chip--selected' : ''}`}
+                      aria-pressed={selectedModelId === m.id}
+                      onClick={() => onSelectApi(p.id, m.id)}
+                      aria-label={`${t.apiSwitchPickerLabel} — ${descriptor.label} ${shortModel}`}
+                    >
+                      <span className="model-chip__name">{shortModel}</span>
+                      <span className="model-chip__desc">{descriptor.label}</span>
+                    </button>
+                  )
+                })}
               </div>
             )
           })}
@@ -165,6 +168,15 @@ function barColor(p: number): string {
 
 function shortName(model: string): string {
   return model.replace(/^Claude\s+/i, '')
+}
+
+// Strip the provider-id prefix from a model id for the API picker chip's top
+// line — 'deepseek-v4-flash' → 'v4-flash', 'kimi-k2.6' → 'k2.6'. The provider
+// name is shown on the chip's second line, so the prefix would be redundant.
+// Falls back to the full id for a model that doesn't carry the prefix.
+function stripProviderPrefix(modelId: string, providerId: string): string {
+  const prefix = `${providerId}-`
+  return modelId.startsWith(prefix) ? modelId.slice(prefix.length) : modelId
 }
 
 // "3h 12m" / "2d 3h 45m" / "8m" — coarse countdown for rate-limit reset

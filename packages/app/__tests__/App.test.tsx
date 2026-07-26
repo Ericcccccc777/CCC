@@ -222,7 +222,7 @@ class AppTests {
         fireEvent.mouseMove(document.querySelector('.island-wrapper')!)
 
         fireEvent.click(document.querySelector('.model-name-btn')!)
-        fireEvent.click(await screen.findByRole('button', { name: /deepseek-v4-flash/i }))
+        fireEvent.click(await screen.findByRole('button', { name: /DeepSeek v4-flash/i }))
         expect(await screen.findByRole('dialog', { name: 'Switch to API model' })).toBeDefined()
         expect(window.ccc.setIgnoreMouseEvents).toHaveBeenLastCalledWith(false)
 
