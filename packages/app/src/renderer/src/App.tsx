@@ -68,6 +68,11 @@ const POPUP_API_SWITCH    = 230   // .api-switch-popup
 const POPUP_CODEX_SWITCH  = 240   // .codex-switch-popup (effort buttons row)
 const POPUP_QUIT_CONFIRM  = 180   // .quit-confirm-popup
 const POPUP_CONTEXT_ALERT = 200   // .api-switch-popup reuse (title + % + hint + 2 buttons)
+// Height the Settings sub-panel adds BELOW the expanded body (API switch +
+// Codex CLI panel + language row). Additive with the model picker: both stack
+// inside the expanded content, so opening settings must not swallow the
+// picker's height. 320 keeps settings-alone at the tuned 520+320 = 840.
+const SETTINGS_PANEL_BUDGET = 320
 
 // Total pill window height for a given UI state. Returns the minimum
 // height the BrowserWindow must have so every visible element (pill +
@@ -108,7 +113,10 @@ function computePillHeight(opts: {
   // exactly to content, the budget has to actually fit. 220 covers the
   // worst case (all rows + per-chip name/desc) with a small buffer.
   if (opts.showModelPicker) h += 220
-  if (opts.showSettings)    h  = Math.max(h, 840)
+  // Additive (not Math.max): settings stacks BELOW the picker in the expanded
+  // panel, so with both open the window must fit picker + settings, else the
+  // bottom of the settings panel is clipped even though the screen has room.
+  if (opts.showSettings)    h += SETTINGS_PANEL_BUDGET
   if (budget > 0)           h += budget
   if (popupBudget > 0)      h += popupBudget
   return h
