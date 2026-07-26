@@ -9,7 +9,7 @@ import {
   type IntervalScheduler,
 } from '../src/main/api/ApiUsageManager'
 import { ApiUsageStore } from '../src/main/api/ApiUsageStore'
-import { DeepSeekClient, type BalanceHttpTransport } from '../src/main/api/DeepSeekClient'
+import { ApiBalanceClient, type BalanceHttpTransport } from '../src/main/api/ApiBalanceClient'
 import type { ApiBalanceSnapshot, ApiUsageSnapshot } from '../src/shared/api-usage'
 
 class FakeKeys implements ApiKeyResolver {
@@ -57,7 +57,7 @@ class ApiUsageManagerTests {
     const store = new ApiUsageStore(dir, () => 1000)
     const keys  = new FakeKeys()
     const http  = new FakeTransport()
-    const client = new DeepSeekClient(http, () => 1000)
+    const client = new ApiBalanceClient(http, () => 1000)
     const out   = new FakeBroadcaster()
     const sched = new ManualScheduler()
     const mgr   = new ApiUsageManager({ store, keys, client, broadcaster: out, scheduler: sched, pollMs: 1000, clock: () => 1000 })
@@ -110,6 +110,24 @@ class ApiUsageManagerTests {
         it('unregister on unknown session is a no-op', () => {
           ctx.mgr.unregisterSession(99)
           expect(ctx.mgr.inspectProvider('deepseek')).toBeNull()
+        })
+
+        it('re-registering the SAME session on the same provider does NOT bump refCount (in-place model switch)', () => {
+          ctx.http.push(9.94)
+          ctx.http.push(9.94)
+          ctx.mgr.registerSession(1, 'deepseek', 'deepseek-v4-flash')
+          ctx.mgr.registerSession(1, 'deepseek', 'deepseek-v4-pro')
+          expect(ctx.mgr.inspectProvider('deepseek')?.refCount).toBe(1)
+          expect(ctx.sched.ticks.length).toBe(1)
+        })
+
+        it('switching a session to a different provider releases the old poller and starts the new one', () => {
+          ctx.http.push(9.94)
+          ctx.http.push(50)
+          ctx.mgr.registerSession(1, 'deepseek', 'deepseek-v4-flash')
+          ctx.mgr.registerSession(1, 'kimi', 'kimi-k3')
+          expect(ctx.mgr.inspectProvider('deepseek')).toBeNull() // old poller cancelled, no leak
+          expect(ctx.mgr.inspectProvider('kimi')?.refCount).toBe(1)
         })
       })
 
@@ -226,6 +244,40 @@ class ApiUsageManagerTests {
             message: { role: 'assistant', usage: { input_tokens: 100, output_tokens: 5 } },
           })
           expect(ctx.store.getSessionUsage(1)?.inputTokens).toBe(100)
+        })
+
+        it('resets token attribution to the new provider/model after a provider switch', () => {
+          ctx.http.push(10)
+          ctx.http.push(10)
+          ctx.mgr.registerSession(1, 'deepseek', 'deepseek-v4-flash')
+          ctx.mgr.onTranscriptLine(1, { message: { role: 'assistant', usage: { input_tokens: 100 } } })
+          ctx.mgr.registerSession(1, 'kimi', 'kimi-k3') // provider switch via restartAsApi
+          ctx.mgr.onTranscriptLine(1, { message: { role: 'assistant', usage: { input_tokens: 7 } } })
+          const last = ctx.out.usage.at(-1)!
+          expect(last.providerId).toBe('kimi')
+          expect(last.modelId).toBe('kimi-k3')
+          expect(last.inputTokens).toBe(7) // reset — not 107 carried over from DeepSeek
+        })
+
+        it('same-provider model switch resets + re-prices, persisting and broadcasting a zero snapshot', () => {
+          ctx.http.push(10)
+          ctx.http.push(10)
+          ctx.mgr.registerSession(1, 'deepseek', 'deepseek-v4-flash')
+          ctx.mgr.onTranscriptLine(1, { message: { role: 'assistant', usage: { input_tokens: 100 } } })
+          ctx.mgr.registerSession(1, 'deepseek', 'deepseek-v4-pro') // in-place model switch (restartAsApi)
+          // A zeroed snapshot for the new model is broadcast + persisted at once,
+          // so the UI drops the old figures and a restart-before-transcript can't
+          // reseed the old model's totals.
+          const afterSwitch = ctx.out.usage.at(-1)!
+          expect(afterSwitch.modelId).toBe('deepseek-v4-pro')
+          expect(afterSwitch.inputTokens).toBe(0)
+          expect(ctx.store.getSessionUsage(1)?.inputTokens).toBe(0)
+          expect(ctx.store.getSessionUsage(1)?.modelId).toBe('deepseek-v4-pro')
+          // New tokens now accrue + price under the new model
+          ctx.mgr.onTranscriptLine(1, { message: { role: 'assistant', usage: { input_tokens: 7 } } })
+          const last = ctx.out.usage.at(-1)!
+          expect(last.modelId).toBe('deepseek-v4-pro')
+          expect(last.inputTokens).toBe(7)
         })
 
         it('cold-load resumes accumulation from persisted snapshot', () => {

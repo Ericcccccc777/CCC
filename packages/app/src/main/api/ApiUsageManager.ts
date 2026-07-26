@@ -1,4 +1,4 @@
-// Wires DeepSeekClient + BalanceDeltaTracker + ApiUsageStore +
+// Wires ApiBalanceClient + BalanceDeltaTracker + ApiUsageStore +
 // TokenUsageAccumulator into a single object owned by IpcHandlers.
 //
 // Responsibilities:
@@ -14,7 +14,7 @@ import type { ApiProviderId } from '../../shared/api-provider'
 import type { ApiBalanceSnapshot, ApiUsageSnapshot } from '../../shared/api-usage'
 import { ApiUsageStore } from './ApiUsageStore'
 import { BalanceDeltaTracker } from './BalanceDeltaTracker'
-import { DeepSeekClient, type BalanceFetchOutcome } from './DeepSeekClient'
+import { ApiBalanceClient, type BalanceFetchOutcome } from './ApiBalanceClient'
 import { TokenUsageAccumulator, extractUsageDelta } from './TokenUsageAccumulator'
 
 export interface ApiKeyResolver {
@@ -43,19 +43,20 @@ interface ProviderState {
 export class ApiUsageManager {
   private readonly store:    ApiUsageStore
   private readonly keys:     ApiKeyResolver
-  private readonly client:   DeepSeekClient
+  private readonly client:   ApiBalanceClient
   private readonly out:      UsageBroadcaster
   private readonly sched:    IntervalScheduler
   private readonly pollMs:   number
   private readonly clock:    () => number
   private accumulators       = new Map<number, TokenUsageAccumulator>()
   private sessionProviders   = new Map<number, ApiProviderId>()
+  private sessionModels      = new Map<number, string>()
   private providers          = new Map<ApiProviderId, ProviderState>()
 
   constructor(deps: {
     store:        ApiUsageStore
     keys:         ApiKeyResolver
-    client:       DeepSeekClient
+    client:       ApiBalanceClient
     broadcaster:  UsageBroadcaster
     scheduler?:   IntervalScheduler
     pollMs?:      number
@@ -70,25 +71,69 @@ export class ApiUsageManager {
     this.clock  = deps.clock     ?? Date.now
   }
 
-  // Called when an API-mode session is launched or its mode flips on
-  // restartAsApi. Idempotent — re-registering the same sessionId is a no-op
-  // for the accumulator (so a model switch in the same provider doesn't
-  // wipe accumulated tokens).
+  // Called when an API-mode session is launched, restored, or its
+  // provider/model flips on restartAsApi. A session holds exactly ONE poller
+  // refcount on its CURRENT provider at a time; the accumulator tracks the
+  // CURRENT provider+model.
+  //
+  //   - brand-new / restored session: seed the accumulator from persisted usage
+  //     and acquire the provider's poller.
+  //   - provider OR model switch: restartAsApi spawns a NEW process + transcript
+  //     ("history not preserved"), so reset the accumulator to the new
+  //     provider/model (else new tokens keep being priced + attributed against
+  //     the OLD model) and persist + broadcast a zeroed snapshot immediately, so
+  //     the UI drops the stale figures and a restart before the first new
+  //     transcript line reseeds from zero rather than the old model's totals.
+  //   - same provider: keep its poller ref (never double-count); a provider
+  //     switch releases the old poller so it can't leak.
   registerSession(sessionId: number, providerId: ApiProviderId, modelId: string): void {
-    if (!this.accumulators.has(sessionId)) {
-      const seed = this.store.getSessionUsage(sessionId)
-      this.accumulators.set(sessionId, new TokenUsageAccumulator(
-        { sessionId, providerId, modelId },
-        seed ?? undefined,
-        this.clock,
-      ))
-    }
-    this.sessionProviders.set(sessionId, providerId)
+    const prevProvider    = this.sessionProviders.get(sessionId)
+    const prevModel       = this.sessionModels.get(sessionId)
+    const isNewSession    = !this.accumulators.has(sessionId)
+    const providerChanged = prevProvider !== undefined && prevProvider !== providerId
+    const modelChanged    = prevModel    !== undefined && prevModel    !== modelId
+    const switched        = !isNewSession && (providerChanged || modelChanged)
 
+    if (isNewSession || switched) {
+      const seed = isNewSession ? this.store.getSessionUsage(sessionId) : undefined
+      const acc  = new TokenUsageAccumulator({ sessionId, providerId, modelId }, seed ?? undefined, this.clock)
+      this.accumulators.set(sessionId, acc)
+      if (switched) {
+        const zero = acc.snapshot()
+        this.store.setSessionUsage(zero)
+        this.out.sendUsage(zero)
+      }
+    }
+    this.sessionModels.set(sessionId, modelId)
+
+    // Same provider as before → the session already holds this provider's ref;
+    // just refresh the balance so the switch shows a current figure.
+    if (prevProvider === providerId) {
+      void this.refreshBalance(providerId)
+      return
+    }
+
+    if (providerChanged) this.releaseProvider(prevProvider)
+    this.sessionProviders.set(sessionId, providerId)
+    this.acquireProvider(providerId)
+  }
+
+  unregisterSession(sessionId: number): void {
+    const providerId = this.sessionProviders.get(sessionId)
+    this.sessionProviders.delete(sessionId)
+    this.sessionModels.delete(sessionId)
+    this.accumulators.delete(sessionId)
+    if (!providerId) return
+    this.releaseProvider(providerId)
+  }
+
+  // Add one session's poll reference to a provider, starting the poller on the
+  // first reference. Triggers an immediate refresh so the session sees a fresh
+  // balance without waiting a full poll interval.
+  private acquireProvider(providerId: ApiProviderId): void {
     const existing = this.providers.get(providerId)
     if (existing) {
       existing.refCount += 1
-      // Trigger an immediate refresh so the new session sees a fresh balance.
       void this.refreshBalance(providerId)
       return
     }
@@ -104,12 +149,9 @@ export class ApiUsageManager {
     void this.refreshBalance(providerId)
   }
 
-  unregisterSession(sessionId: number): void {
-    const providerId = this.sessionProviders.get(sessionId)
-    this.sessionProviders.delete(sessionId)
-    this.accumulators.delete(sessionId)
-    if (!providerId) return
-
+  // Drop one session's poll reference; cancel + forget the poller when the last
+  // session using this provider goes away.
+  private releaseProvider(providerId: ApiProviderId): void {
     const state = this.providers.get(providerId)
     if (!state) return
     state.refCount -= 1

@@ -82,6 +82,15 @@ class TokenUsageAccumulatorTests {
           expect(s.estimatedCostUsd).toBeCloseTo(0.0028, 6)
         })
 
+        it('computes cost for a Kimi model from the kimi pricing table', () => {
+          const acc = new TokenUsageAccumulator(
+            { sessionId: 2, providerId: 'kimi', modelId: 'kimi-k3' },
+          )
+          // 1M input + 1M output → 3.0 + 15.0 = 18.0
+          const s = acc.apply({ inputTokens: 1_000_000, outputTokens: 1_000_000 })
+          expect(s.estimatedCostUsd).toBeCloseTo(18.0, 6)
+        })
+
         it('unknown model returns zero cost (graceful degrade)', () => {
           const acc = new TokenUsageAccumulator(
             { sessionId: 1, providerId: 'deepseek', modelId: 'unknown-model-xyz' },

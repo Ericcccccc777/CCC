@@ -2,7 +2,7 @@ import { join } from 'path'
 import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync } from 'fs'
 import { request as httpsRequest, RequestOptions } from 'https'
 import {
-  DEEPSEEK_BASE_URL,
+  apiProviderDescriptor,
   type ApiProviderConfig,
   type ApiProviderId,
   type ApiProviderListEntry,
@@ -124,17 +124,18 @@ export class ApiProviderManager {
     }
   }
 
-  // Sends a 1-token messages.create to DeepSeek's Anthropic-compatible
+  // Sends a 1-token messages.create to the provider's Anthropic-compatible
   // endpoint. 200 = ok; 4xx with a clear status reports back; network
-  // failures get a generic message. Cost: ~1 input token (DeepSeek may not
-  // bill at all for this; if they do it is sub-cent).
+  // failures get a generic message. Cost: ~1 input token (usually not billed;
+  // if it is, sub-cent).
   async test(config: ApiProviderConfig, plaintextKey: string): Promise<ApiTestResult> {
     if (!plaintextKey || plaintextKey.trim().length === 0) {
       return { ok: false, message: 'Empty key' }
     }
-    const url = `${DEEPSEEK_BASE_URL}/v1/messages`
-    // DeepSeek's Anthropic-compatible endpoint uses Bearer auth
-    // (ANTHROPIC_AUTH_TOKEN), not the Anthropic-cloud `x-api-key` header.
+    const descriptor = apiProviderDescriptor(config.id)
+    const url = `${descriptor.baseUrl}/v1/messages`
+    // The Anthropic-compatible endpoints use Bearer auth (ANTHROPIC_AUTH_TOKEN),
+    // not the Anthropic-cloud `x-api-key` header.
     const headers = {
       'authorization':     `Bearer ${plaintextKey.trim()}`,
       'anthropic-version': '2023-06-01',
@@ -156,7 +157,7 @@ export class ApiProviderManager {
       if (resp.status === 404) {
         return { ok: false, message: 'Model not found — try a different model id' }
       }
-      return { ok: false, message: `DeepSeek returned ${resp.status}` }
+      return { ok: false, message: `${descriptor.label} returned ${resp.status}` }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       return { ok: false, message: `Network error: ${msg}` }

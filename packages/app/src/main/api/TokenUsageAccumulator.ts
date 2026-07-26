@@ -14,7 +14,7 @@
 // is mid-flight (observed once during spike). Negatives would underflow
 // the running totals, so we drop them silently.
 
-import { lookupPricing } from './deepseek-pricing'
+import { lookupPricing } from './pricing'
 import type { ApiProviderId } from '../../shared/api-provider'
 import type { ApiUsageSnapshot } from '../../shared/api-usage'
 

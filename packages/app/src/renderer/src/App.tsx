@@ -138,7 +138,7 @@ function classifyHoverZone(x: number, wa: WorkArea): HoverZone {
   if (x >= wa.x + wa.width - EDGE_ZONE_W)   return 'top'
   return 'default'
 }
-import type { ApiProviderId, ApiProviderListEntry } from '../../shared/api-provider'
+import { apiProviderDescriptor, type ApiProviderId, type ApiProviderListEntry } from '../../shared/api-provider'
 import type { ApiBalanceSnapshot, ApiUsageSnapshot } from '../../shared/api-usage'
 import type { ClaudeCliStatus } from '../../shared/claude-cli'
 import type { CodexCliStatus } from '../../shared/codex-cli'
@@ -285,7 +285,7 @@ export function App(): JSX.Element {
   // Chunk E — DeepSeek balance + per-session token usage. Map keys are
   // providerId for balance (one stream per provider) and sessionId for
   // usage (one stream per session).
-  const [apiBalances, setApiBalances] = useState<Record<ApiProviderId, ApiBalanceSnapshot>>({} as Record<ApiProviderId, ApiBalanceSnapshot>)
+  const [apiBalances, setApiBalances] = useState<Partial<Record<ApiProviderId, ApiBalanceSnapshot>>>({})
   const [apiUsage,    setApiUsage]    = useState<Record<number, ApiUsageSnapshot>>({})
   const wrapperRef                            = useRef<HTMLDivElement>(null)
   // Per-session last-fired context-alert band (0 none / 1 ≥85% / 2 ≥95%) for
@@ -939,7 +939,11 @@ export function App(): JSX.Element {
         const closing = prev.find(s => s.id === sessionId)
         if (!closing) return prev
         if (activeId !== sessionId) {
-          const engine = closing.mode === 'codex' ? 'Codex' : (closing.mode === 'api' ? 'DeepSeek' : 'Claude')
+          const engine = closing.mode === 'codex'
+            ? 'Codex'
+            : (closing.mode === 'api'
+                ? (closing.apiProviderId ? apiProviderDescriptor(closing.apiProviderId).label : 'API')
+                : 'Claude')
           const detail = closing.mode === 'codex'
             ? `${closing.name}/${closing.codexModelId ?? closing.model}`
             : `${closing.name}/${closing.model}`
@@ -1407,7 +1411,7 @@ export function App(): JSX.Element {
   // User clicked a custom-API model chip in the picker → open the switch
   // popup. We re-fetch providers first so a user who added a key in Settings
   // since last mount still gets the right modelId.
-  const requestApiSwitch = useCallback(async (providerId: 'deepseek', modelId: string): Promise<void> => {
+  const requestApiSwitch = useCallback(async (providerId: ApiProviderId, modelId: string): Promise<void> => {
     if (!activeSession) return
     await reloadApiProviders()
     setPendingApiSwitch({ providerId, modelId })
@@ -1686,7 +1690,7 @@ export function App(): JSX.Element {
 
       {pendingApiSwitch && (
         <ApiSwitchPopup
-          providerLabel={pendingApiSwitch.modelId}
+          providerLabel={`${apiProviderDescriptor(pendingApiSwitch.providerId).label} · ${pendingApiSwitch.modelId}`}
           busy={apiSwitchBusy}
           onRestart={() => void confirmApiRestart()}
           onOpenNew={() => void confirmApiOpenNew()}

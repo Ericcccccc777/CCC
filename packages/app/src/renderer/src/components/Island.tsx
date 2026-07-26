@@ -3,7 +3,7 @@ import type { CSSProperties, MouseEvent as ReactMouseEvent } from 'react'
 import type { AppState, OverlayMode, Session, ModelInfo, ActionType, SessionNotification } from '../types'
 import { useLang, useLangContext, LANG_LABELS } from '../i18n'
 import type { LangCode } from '../i18n'
-import { DEEPSEEK_MODELS, type ApiProviderId, type ApiProviderListEntry } from '../../../shared/api-provider'
+import { apiProviderDescriptor, type ApiProviderId, type ApiProviderListEntry } from '../../../shared/api-provider'
 import type { ApiBalanceSnapshot, ApiUsageSnapshot } from '../../../shared/api-usage'
 import { StateIcon } from './StateIcon'
 import { Ring } from './Ring'
@@ -40,7 +40,7 @@ interface ModelPickerStripProps {
   variant:         'pill' | 'panel'
   mode:            'anthropic' | 'api' | 'codex'
   apiProviders:    readonly ApiProviderListEntry[]
-  onSelectApi:     (providerId: 'deepseek', modelId: string) => void
+  onSelectApi:     (providerId: ApiProviderId, modelId: string) => void
   codexModels:     readonly CodexModel[]
   onSelectCodex:   (modelId: string) => void
   selectedEffort?: ClaudeReasoningEffort
@@ -49,7 +49,9 @@ interface ModelPickerStripProps {
 
 function ModelPickerStrip({ selectedModelId, onSelect, variant, mode, apiProviders, onSelectApi, codexModels, onSelectCodex, selectedEffort, onSelectEffort }: ModelPickerStripProps): JSX.Element {
   const t = useLang()
-  const hasVerifiedDeepSeekKey = apiProviders.some(p => p.id === 'deepseek' && p.hasKey && p.verified)
+  // Every provider with a verified, stored key gets its own row of model chips
+  // in the picker, so the user can switch a session to DeepSeek, Kimi, etc.
+  const verifiedProviders = apiProviders.filter(p => p.hasKey && p.verified)
   const effortLabel = (eff: ClaudeReasoningEffort): string =>
     eff === 'low'    ? t.codexEffortLow :
     eff === 'medium' ? t.codexEffortMedium :
@@ -127,23 +129,28 @@ function ModelPickerStrip({ selectedModelId, onSelect, variant, mode, apiProvide
         )
       })()}
 
-      {hasVerifiedDeepSeekKey && (
+      {verifiedProviders.length > 0 && (
         <>
           <div className="model-picker-divider" aria-hidden="true" />
-          <div className="model-picker-custom-row">
-            {DEEPSEEK_MODELS.map(m => (
-              <button
-                key={m.id}
-                className={`model-chip model-chip--api${selectedModelId === m.id ? ' model-chip--selected' : ''}`}
-                aria-pressed={selectedModelId === m.id}
-                onClick={() => onSelectApi('deepseek', m.id)}
-                aria-label={`${t.apiSwitchPickerLabel} — ${m.label}`}
-              >
-                <span className="model-chip__name">{m.label.replace(/^deepseek-/i, 'DeepSeek ')}</span>
-                <span className="model-chip__desc">{m.id}</span>
-              </button>
-            ))}
-          </div>
+          {verifiedProviders.map(p => {
+            const descriptor = apiProviderDescriptor(p.id)
+            return (
+              <div className="model-picker-custom-row" key={p.id}>
+                {descriptor.models.map(m => (
+                  <button
+                    key={m.id}
+                    className={`model-chip model-chip--api${selectedModelId === m.id ? ' model-chip--selected' : ''}`}
+                    aria-pressed={selectedModelId === m.id}
+                    onClick={() => onSelectApi(p.id, m.id)}
+                    aria-label={`${t.apiSwitchPickerLabel} — ${descriptor.label} ${m.label}`}
+                  >
+                    <span className="model-chip__name">{m.label}</span>
+                    <span className="model-chip__desc">{descriptor.label}</span>
+                  </button>
+                ))}
+              </div>
+            )
+          })}
         </>
       )}
     </div>
@@ -299,7 +306,7 @@ interface IslandProps {
   remotePopupSessionId: number | null
   showAccessibilityWarning: boolean
   apiProviders:     readonly ApiProviderListEntry[]
-  apiBalances:      Record<ApiProviderId, ApiBalanceSnapshot>
+  apiBalances:      Partial<Record<ApiProviderId, ApiBalanceSnapshot>>
   apiUsage:         Record<number, ApiUsageSnapshot>
   // Overlay-mode props (drag/hide/shrink). Default values keep this
   // component backwards-compatible for tests that don't exercise the new
@@ -323,7 +330,7 @@ interface IslandProps {
   onToggleExpand:   () => void
   onToggleModelPicker: () => void
   onSelectModel:      (modelId: string) => void
-  onSelectApiModel:   (providerId: 'deepseek', modelId: string) => void
+  onSelectApiModel:   (providerId: ApiProviderId, modelId: string) => void
   codexModels:         readonly CodexModel[]
   onSelectCodexModel:  (modelId: string) => void
   onSelectEffort?:     (effort: ClaudeReasoningEffort) => void
@@ -421,7 +428,7 @@ export function Island({
     onToggleModelPicker()
   }
 
-  const handleApiPickerSelect = (providerId: 'deepseek', modelId: string): void => {
+  const handleApiPickerSelect = (providerId: ApiProviderId, modelId: string): void => {
     onSelectApiModel(providerId, modelId)
     onToggleModelPicker()
   }

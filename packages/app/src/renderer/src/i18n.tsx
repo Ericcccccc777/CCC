@@ -27,7 +27,7 @@ export interface Translations {
   language:       string
   // Settings → API zone
   api:                  string
-  apiAddDeepseek:       string
+  apiAddProvider:       string
   apiNone:              string
   apiKey:               string
   apiKeyPlaceholder:    string
@@ -235,7 +235,7 @@ const en: Translations = {
   quitConfirmCancel:     'Cancel',
   language:       'Language',
   api:                 'API',
-  apiAddDeepseek:      '+ Add DeepSeek',
+  apiAddProvider:      '+ Add {name}',
   apiNone:             'No custom API configured',
   apiKey:              'API Key',
   apiKeyPlaceholder:   'Paste your API key',
@@ -431,7 +431,7 @@ const zh: Translations = {
   quitConfirmCancel:     '取消',
   language:       '语言',
   api:                 'API',
-  apiAddDeepseek:      '+ 添加 DeepSeek',
+  apiAddProvider:      '+ 添加 {name}',
   apiNone:             '未配置自定义 API',
   apiKey:              'API 密钥',
   apiKeyPlaceholder:   '粘贴你的 API 密钥',
@@ -627,7 +627,7 @@ const ko: Translations = {
   quitConfirmCancel:     '취소',
   language:       '언어',
   api:                 'API',
-  apiAddDeepseek:      '+ DeepSeek 추가',
+  apiAddProvider:      '+ {name} 추가',
   apiNone:             '사용자 정의 API가 없습니다',
   apiKey:              'API 키',
   apiKeyPlaceholder:   'API 키를 붙여넣으세요',

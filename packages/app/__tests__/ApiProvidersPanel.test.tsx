@@ -17,10 +17,10 @@ class ApiProvidersPanelTests {
   static run(): void {
     describe('ApiProvidersPanel', () => {
       describe('empty state', () => {
-        it('shows "No custom API configured" hint and Add DeepSeek button', async () => {
+        it('shows an Add button for every provider (DeepSeek + Kimi) when none configured', async () => {
           render(<ApiProvidersPanel {...ApiProvidersPanelTests.makeProps()} />)
-          await waitFor(() => expect(screen.getByText(/No custom API/i)).toBeDefined())
-          expect(screen.getByText(/Add DeepSeek/)).toBeDefined()
+          await waitFor(() => expect(screen.getByText(/Add DeepSeek/)).toBeDefined())
+          expect(screen.getByText(/Add Kimi/)).toBeDefined()
         })
 
         it('opens the form when Add DeepSeek clicked', async () => {
@@ -114,6 +114,22 @@ class ApiProvidersPanelTests {
             { id: 'deepseek', modelId: 'deepseek-v4-flash' }, 'sk-test',
           ))
         })
+
+        it('the Kimi card tests + saves against the kimi provider + its default model', async () => {
+          const save = vi.fn().mockResolvedValue({ ok: true })
+          const test = vi.fn().mockResolvedValue({ ok: true, message: 'Connected' })
+          render(<ApiProvidersPanel {...ApiProvidersPanelTests.makeProps({ save, test })} />)
+          await waitFor(() => screen.getByText(/Add Kimi/))
+          fireEvent.click(screen.getByText(/Add Kimi/))
+          fireEvent.change(screen.getByPlaceholderText(/Paste your API key/i), { target: { value: 'sk-kimi' } })
+          fireEvent.click(screen.getByText('Save'))
+          await waitFor(() => expect(test).toHaveBeenCalledWith(
+            { id: 'kimi', modelId: 'kimi-k3' }, 'sk-kimi',
+          ))
+          await waitFor(() => expect(save).toHaveBeenCalledWith(
+            expect.objectContaining({ id: 'kimi', modelId: 'kimi-k3', verifiedAt: expect.any(Number) }), 'sk-kimi',
+          ))
+        })
       })
 
       describe('configured state', () => {
@@ -165,7 +181,8 @@ class ApiProvidersPanelTests {
           await waitFor(() => screen.getByText('DeepSeek'))
           fireEvent.click(screen.getByText('Remove'))
           await waitFor(() => expect(remove).toHaveBeenCalledWith('deepseek'))
-          await waitFor(() => expect(screen.getByText(/No custom API/i)).toBeDefined())
+          // DeepSeek card falls back to its empty "+ Add DeepSeek" affordance.
+          await waitFor(() => expect(screen.getByText(/Add DeepSeek/)).toBeDefined())
         })
 
         it('Edit opens the key-only form without a model picker', async () => {

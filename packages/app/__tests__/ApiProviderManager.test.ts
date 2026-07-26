@@ -227,6 +227,15 @@ class ApiProviderManagerTests {
           expect(http.calls[0]?.headers['anthropic-version']).toBeTruthy()
           expect(http.calls[0]?.url).toContain('deepseek.com')
         })
+
+        it('routes the Kimi provider to the moonshot Anthropic endpoint', async () => {
+          const { mgr, http } = ApiProviderManagerTests.makeMgr()
+          http.next = { status: 200, body: '{}' }
+          const r = await mgr.test({ id: 'kimi', modelId: 'kimi-k3' }, 'sk-kimi')
+          expect(r.ok).toBe(true)
+          expect(http.calls[0]?.url).toBe('https://api.moonshot.cn/anthropic/v1/messages')
+          expect(http.calls[0]?.headers['authorization']).toBe('Bearer sk-kimi')
+        })
       })
     })
   }

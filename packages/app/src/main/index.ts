@@ -27,8 +27,8 @@ import { STATUSLINE_RELAY_JS } from './platform/shared'
 import { ApiProviderManager, VaultUnavailableError, type CryptoVault } from './api/ApiProviderManager'
 import { ApiUsageManager } from './api/ApiUsageManager'
 import { ApiUsageStore } from './api/ApiUsageStore'
-import { DeepSeekClient } from './api/DeepSeekClient'
-import { DEEPSEEK_BASE_URL, type ApiProviderConfig, type ApiProviderId } from '../shared/api-provider'
+import { ApiBalanceClient } from './api/ApiBalanceClient'
+import { apiProviderDescriptor, type ApiProviderConfig, type ApiProviderId } from '../shared/api-provider'
 import type { ApiBalanceSnapshot, ApiUsageSnapshot } from '../shared/api-usage'
 import type {
   SessionMode,
@@ -629,7 +629,7 @@ class SessionManager {
     try { this.settings.inject(workspace, hookCmds, statuslineCmd) } catch { /* non-fatal */ }
 
     const env = {
-      ANTHROPIC_BASE_URL:   DEEPSEEK_BASE_URL,
+      ANTHROPIC_BASE_URL:   apiProviderDescriptor(providerId).baseUrl,
       ANTHROPIC_AUTH_TOKEN: key,
     }
 
@@ -778,7 +778,7 @@ class SessionManager {
     try { this.settings.inject(entry.workspace, hookCmds, statuslineCmd) } catch { /* non-fatal */ }
 
     const env = {
-      ANTHROPIC_BASE_URL:   DEEPSEEK_BASE_URL,
+      ANTHROPIC_BASE_URL:   apiProviderDescriptor(providerId).baseUrl,
       ANTHROPIC_AUTH_TOKEN: key,
     }
 
@@ -902,7 +902,7 @@ class IpcHandlers {
     this.apiUsage = new ApiUsageManager({
       store:       new ApiUsageStore(app.getPath('userData')),
       keys:        this.apiProviders,
-      client:      new DeepSeekClient(),
+      client:      new ApiBalanceClient(),
       broadcaster: {
         sendUsage:   (s: ApiUsageSnapshot)   => { win.webContents.send(IPC.API_USAGE_UPDATE,   s) },
         sendBalance: (s: ApiBalanceSnapshot) => { win.webContents.send(IPC.API_BALANCE_UPDATE, s) },
