@@ -19,6 +19,9 @@ const PILL_HEIGHT_BASE = 60
 // box-shadow renders fully and isn't clipped at the BrowserWindow edge.
 // 16 is enough headroom for the 10px shadow blur + a couple px buffer.
 const SHADOW_PAD       = 16
+// Extra window height below the measured content so the pill's drop shadow
+// isn't clipped at the BrowserWindow's bottom edge (default/top-hidden modes).
+const OVERLAY_BOTTOM_PAD = 12
 const CORNER_SIZE      = 46
 // CORNER_INSET kept ≥ SHADOW_PAD so the window's x/y never goes negative
 // after subtracting the pad — keeps bounds-clamping in main process a no-op.
@@ -263,6 +266,12 @@ export function App(): JSX.Element {
   const [activeId, setActiveId]               = useState<number | null>(null)
   const [expanded, setExpanded]               = useState(false)
   const [showModelPicker, setShowModelPicker] = useState(false)
+  // Actual rendered height of the overlay content (pill + expanded panel +
+  // picker + any popup), measured via ResizeObserver. The window is sized to
+  // this so it fits the content exactly — no fixed pixel budget to under-
+  // estimate and clip the bottom. null until the first measurement (then the
+  // pixel estimate is used as a one-frame fallback). See the observer effect.
+  const [measuredHeight, setMeasuredHeight] = useState<number | null>(null)
   const [defaultModelId, setDefaultModelId]   = useState('')
   const [isSwitchingModel, setIsSwitchingModel] = useState(false)
   const [remotePopupSessionId, setRemotePopupSessionId] = useState<number | null>(null)
@@ -601,6 +610,32 @@ export function App(): JSX.Element {
          || (overlayState === 'done' && !cornerDoneExpired))
         || overlayNotification !== null)
 
+  // Measure the overlay content's true rendered height and drive the window
+  // size from it. The wrapper is position:fixed + content-sized, so its height
+  // is independent of the window height (no resize feedback loop) and always
+  // reflects the real pill + expanded panel + picker + popup stack — sizing the
+  // window to it can't clip the bottom the way a fixed pixel budget could.
+  useEffect(() => {
+    const el = wrapperRef.current
+    if (!el || typeof ResizeObserver === 'undefined') return
+    let raf = 0
+    const ro = new ResizeObserver(entries => {
+      const box = entries[0]
+      if (!box) return
+      const h = box.borderBoxSize?.[0]?.blockSize ?? box.contentRect.height
+      if (h <= 0) return
+      // Defer the state update out of the observer callback (coalescing rapid
+      // fires) so resizing the window can't re-enter the observer synchronously
+      // — avoids the "ResizeObserver loop" warning if a child ever tracks the
+      // viewport (e.g. a popup's max-height: 100vh). Math.ceil + React's
+      // bail-out means a stable height triggers no work.
+      cancelAnimationFrame(raf)
+      raf = requestAnimationFrame(() => setMeasuredHeight(Math.ceil(h)))
+    })
+    ro.observe(el)
+    return () => { cancelAnimationFrame(raf); ro.disconnect() }
+  }, [])
+
   const targetBounds: Bounds | null = useMemo(() => {
     if (!workArea) return null
     if (dragState) {
@@ -646,9 +681,14 @@ export function App(): JSX.Element {
     // doesn't visibly affect anything; click-passthrough is preserved.
     if (overlayMode === 'default' || overlayMode === 'top-hidden') {
       const minH = overlayMode === 'top-hidden' ? 120 : PILL_HEIGHT_BASE
+      // Prefer the measured content height (fits exactly, never clips); the
+      // pixel estimate `h` is only a fallback for the first frame before the
+      // ResizeObserver has reported. OVERLAY_BOTTOM_PAD leaves room for the
+      // pill's drop shadow below the content box.
+      const contentH = measuredHeight !== null ? measuredHeight + OVERLAY_BOTTOM_PAD : h
       return {
         x: workArea.x, y: workArea.y,
-        width: workArea.width, height: Math.max(minH, h),
+        width: workArea.width, height: Math.max(minH, contentH),
       }
     }
     // corner-shrunk: window height = visible corner content + top inset +
@@ -679,7 +719,7 @@ export function App(): JSX.Element {
       x: workArea.x, y: workArea.y,
       width: workArea.width, height: cornerHeight,
     }
-  }, [workArea, dragState, overlayMode, overlayPeek, expanded, showSettings, showModelPicker, overlayNotification, remotePopupSessionId, hasCornerHint, pendingEngineWorkspace, pendingApiSwitch, pendingCodexSwitch, showQuitConfirm, contextAlert, apiProviders])
+  }, [workArea, dragState, overlayMode, overlayPeek, expanded, showSettings, showModelPicker, overlayNotification, remotePopupSessionId, hasCornerHint, pendingEngineWorkspace, pendingApiSwitch, pendingCodexSwitch, showQuitConfirm, contextAlert, apiProviders, measuredHeight])
 
   useEffect(() => {
     if (!targetBounds) return
