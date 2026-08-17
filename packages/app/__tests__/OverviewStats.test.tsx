@@ -11,6 +11,7 @@ const summary: HarnessSummary = {
   installed: true, install: null, constitution: null, workflowDoc: null,
   checkpoints: [], todolist: null,
   memory: { scratchpad: null, observations: [], snapshots: [], archive: [], conventions: null },
+  workflow: null,
 }
 
 const stats: ProjectStats = {

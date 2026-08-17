@@ -1,11 +1,14 @@
-import type { HarnessSummary, HarnessCheckpoint } from '../../../shared/harness'
+import type { HarnessSummary, HarnessCheckpoint, WorkflowStage } from '../../../shared/harness'
 import type { LangCode } from '../i18n'
 import type { DashStrings } from './strings'
 import { fmt } from './strings'
-import { TOTAL_STAGES } from './util'
 
-// Page 3 — Workflow. (A) static教学: the 9 stages + 3 lanes. (B) live: a
-// per-active-feature 9-stage progress bar from each checkpoint.
+// Page 3 — Workflow. (A) static教学: the active template's stages + 3 lanes.
+// (B) live: a per-active-feature progress bar from each checkpoint.
+//
+// The stage list is DATA-DRIVEN by the project's active workflow template
+// (summary.workflow, written by CCC-MAGI). When no template is present we fall
+// back to the legacy hardcoded 9 full-stack stage names (backward compatible).
 
 const STAGE_NAMES: Record<LangCode, string[]> = {
   en: ['Draft spec', 'Finalize', 'Schema', 'Plan', 'Implement', 'Tests', 'Smoke test', 'Commit', 'Watch'],
@@ -16,6 +19,23 @@ const LANES: Record<LangCode, Array<[string, string]>> = {
   en: [['Full', 'new feature / intent change'], ['Stability-fix', 'bug fix, test-first'], ['Trivial', '< 20 LOC']],
   zh: [['完整', '新功能 / 意图变更'], ['稳定性修复', '改 bug，先写测试'], ['轻量', '< 20 行']],
   ko: [['Full', 'new feature'], ['Stability-fix', 'bug fix'], ['Trivial', '< 20 LOC']],
+}
+
+type StageRow = { n: number; title: string; slot?: string | null }
+
+// Resolve the stage list to render: the active template's stages, or the legacy
+// 9 full-stack names if no template is present.
+function activeStages(summary: HarnessSummary, lang: LangCode): StageRow[] {
+  const wf = summary.workflow
+  if (wf && Array.isArray(wf.stages) && wf.stages.length > 0) {
+    return wf.stages.map((st: WorkflowStage, i) => ({
+      n:     typeof st.n === 'number' ? st.n : i + 1,
+      title: st.title ?? st.id ?? `Stage ${i + 1}`,
+      slot:  st.slot ?? null,
+    }))
+  }
+  const names = STAGE_NAMES[lang] ?? STAGE_NAMES.en
+  return names.map((nm, i) => ({ n: i + 1, title: nm, slot: null }))
 }
 
 type StageState = 'done' | 'current' | 'skipped' | 'todo'
@@ -37,8 +57,7 @@ function verdictClass(v?: string): string {
   }
 }
 
-function FeatureProgress({ cp, s, lang }: { cp: HarnessCheckpoint; s: DashStrings; lang: LangCode }): JSX.Element {
-  const names = STAGE_NAMES[lang] ?? STAGE_NAMES.en
+function FeatureProgress({ cp, stages, s }: { cp: HarnessCheckpoint; stages: StageRow[]; s: DashStrings }): JSX.Element {
   const sip = cp.stage_in_progress
   return (
     <div className="dash-wf-feature">
@@ -48,10 +67,10 @@ function FeatureProgress({ cp, s, lang }: { cp: HarnessCheckpoint; s: DashString
         <span className="dash-chip is-stage">{fmt(s.stageOf, { n: cp.current_stage ?? 1 })}</span>
       </div>
       <div className="dash-wf-bar">
-        {Array.from({ length: TOTAL_STAGES }, (_, i) => i + 1).map(n => (
-          <div key={n} className={`dash-wf-step is-${stageState(cp, n)}`} title={names[n - 1]}>
-            <span className="dash-wf-step-n">{n}</span>
-            <span className="dash-wf-step-label">{names[n - 1]}</span>
+        {stages.map(st => (
+          <div key={st.n} className={`dash-wf-step is-${stageState(cp, st.n)}`} title={st.slot ? `${st.title} · ${st.slot}` : st.title}>
+            <span className="dash-wf-step-n">{st.n}</span>
+            <span className="dash-wf-step-label">{st.title}</span>
           </div>
         ))}
       </div>
@@ -83,17 +102,23 @@ function FeatureProgress({ cp, s, lang }: { cp: HarnessCheckpoint; s: DashString
 }
 
 export function WorkflowPage({ summary, s, lang }: { summary: HarnessSummary; s: DashStrings; lang: LangCode }): JSX.Element {
-  const names = STAGE_NAMES[lang] ?? STAGE_NAMES.en
   const lanes = LANES[lang] ?? LANES.en
   const cps = summary.checkpoints ?? []
+  const wf = summary.workflow
+  const stages = activeStages(summary, lang)
+  const heading = wf?.title ?? s.theNineStages
   return (
     <div className="dash-page">
       <section className="dash-section">
-        <h3 className="dash-h3">{s.theNineStages}</h3>
+        <h3 className="dash-h3">
+          {heading}
+          {wf?.customized ? <span className="dash-chip is-stage">{s.tplCustomized}</span> : null}
+        </h3>
         <div className="dash-stage-flow">
-          {names.map((nm, i) => (
-            <div key={i} className="dash-stage-pill">
-              <span className="dash-stage-pill-n">{i + 1}</span>{nm}
+          {stages.map(st => (
+            <div key={st.n} className="dash-stage-pill" title={st.slot ?? undefined}>
+              <span className="dash-stage-pill-n">{st.n}</span>{st.title}
+              {st.slot ? <span className="dash-stage-slot"> · {st.slot}</span> : null}
             </div>
           ))}
         </div>
@@ -115,7 +140,7 @@ export function WorkflowPage({ summary, s, lang }: { summary: HarnessSummary; s:
         <h3 className="dash-h3">{s.liveProgress}</h3>
         {cps.length === 0
           ? <div className="dash-muted">{s.noCheckpoints}</div>
-          : cps.map((cp, i) => <FeatureProgress key={cp.feature ?? i} cp={cp} s={s} lang={lang} />)}
+          : cps.map((cp, i) => <FeatureProgress key={cp.feature ?? i} cp={cp} stages={stages} s={s} />)}
       </section>
     </div>
   )
