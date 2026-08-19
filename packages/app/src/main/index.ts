@@ -1,7 +1,7 @@
 import { app, BrowserWindow, screen, ipcMain, dialog, powerMonitor, shell, safeStorage } from 'electron'
 import { join, basename } from 'path'
 import { ChildProcess } from 'child_process'
-import { writeFileSync, unlinkSync, readFileSync } from 'fs'
+import { writeFileSync, unlinkSync, readFileSync, renameSync } from 'fs'
 import { tmpdir } from 'os'
 import { IPC } from '../shared/ipc-channels'
 import { HookServer } from './HookServer'
@@ -88,6 +88,17 @@ class SessionManager {
   private apiProviders: ApiProviderManager
   private registry:    SessionPersistence
   private tmp:         string
+  // One statusLine relay script per install, not per session. The relay body
+  // is session-independent — a session identifies itself through the
+  // CCC_SESSION_ID env var its launch script exports, not through which copy
+  // of the file it runs (see STATUSLINE_RELAY_JS) — so per-session copies
+  // bought nothing and cost correctness: <workspace>/.claude/settings.json
+  // holds exactly ONE statusLine entry, so every session in a workspace runs
+  // whichever copy was injected last, and cleanup() unlinking that copy froze
+  // every sibling's context / 5h / weekly readout. Lives in userData rather
+  // than tmpdir so the OS reaper can't delete it out from under a live
+  // session.
+  private relayScript: string
   // Sessions currently mid-swap via restartAsApi. The bound close handler
   // for the OLD proc fires when SIGTERM cascades through it, but we don't
   // want that to delete the entry from the map (the renderer would see
@@ -120,6 +131,7 @@ class SessionManager {
     this.apiProviders = apiProviders
     this.registry     = registry
     this.tmp          = tmpdir()
+    this.relayScript  = join(app.getPath('userData'), 'ccc-statusline.js')
   }
 
   // Bind a close handler that no-ops if the session entry has been swapped
@@ -155,8 +167,12 @@ class SessionManager {
         return
       }
 
-      this.cleanup(entry, sessionId)
+      // Drop from the map BEFORE cleanup: cleanup's `workspaceStillActive`
+      // check reads this.sessions, so leaving the dying session in it made
+      // the check match itself and settings.restore() unreachable on this
+      // path. kill() has always ordered it this way.
       this.sessions.delete(sessionId)
+      this.cleanup(entry, sessionId)
       this.flushRegistry()
       this.onClosed(sessionId)
     })
@@ -232,8 +248,9 @@ class SessionManager {
   // drop it from the live map + recovery set, persist, and notify the renderer.
   private finalizeUnexpectedClose(sessionId: number, entry: SessionEntry): void {
     this.unexpectedCloseRecovery.delete(sessionId)
-    this.cleanup(entry, sessionId)
+    // Delete before cleanup — see the note in bindClose.
     this.sessions.delete(sessionId)
+    this.cleanup(entry, sessionId)
     this.flushRegistry()
     this.onClosed(sessionId)
   }
@@ -320,8 +337,7 @@ class SessionManager {
     const id = this.nextId++
     const p  = this.port
 
-    const statuslineScript = join(this.tmp, `ccc-statusline-${id}.js`)
-    writeFileSync(statuslineScript, STATUSLINE_RELAY_JS, 'utf8')
+    const statuslineScript = this.writeRelayScript()
 
     const statuslineCmd = this.adapter.buildStatusLineCommand(statuslineScript)
     const hookCmds      = this.adapter.buildHookCommands(id, p)
@@ -368,8 +384,7 @@ class SessionManager {
     const id = this.nextId++
     const p  = this.port
 
-    const statuslineScript = join(this.tmp, `ccc-statusline-${id}.js`)
-    writeFileSync(statuslineScript, STATUSLINE_RELAY_JS, 'utf8')
+    const statuslineScript = this.writeRelayScript()
 
     const statuslineCmd = this.adapter.buildStatusLineCommand(statuslineScript)
     const hookCmds      = this.adapter.buildHookCommands(id, p)
@@ -490,11 +505,16 @@ class SessionManager {
       const origin = s.origin ?? 'ccc-managed'
       const capability = s.capability ?? (mode === 'codex' ? 'basic' : 'full')
 
+      // Re-write the shared statusline relay (hooks are inline — no hook script
+      // files needed). A session persisted by an older build carries a
+      // per-session tmp path here; re-injecting from the shared path re-points
+      // that workspace's settings.json at a file that still exists, which is
+      // what heals a workspace whose relay was unlinked out from under it.
+      let relayPath = s.statuslineScript
       if (mode !== 'codex' && origin === 'ccc-managed' && capability === 'full' && s.statuslineScript) {
-        // Re-write the statusline relay (hooks are inline — no hook script files needed)
-        try { writeFileSync(s.statuslineScript, STATUSLINE_RELAY_JS, 'utf8') } catch { continue }
+        try { relayPath = this.writeRelayScript() } catch { continue }
 
-        const statuslineCmd = this.adapter.buildStatusLineCommand(s.statuslineScript)
+        const statuslineCmd = this.adapter.buildStatusLineCommand(relayPath)
         const hookCmds      = this.adapter.buildHookCommands(s.id, this.port)
         try { this.settings.inject(s.workspace, hookCmds, statuslineCmd) } catch { /* non-fatal */ }
       }
@@ -512,7 +532,7 @@ class SessionManager {
         name:             s.name,
         modelId:          s.modelId,
         pidFile:          s.pidFile,
-        statuslineScript: s.statuslineScript,
+        statuslineScript: relayPath,
         cleanupPaths:     result.cleanupPaths,
         mode,
         origin,
@@ -621,8 +641,7 @@ class SessionManager {
     const id = this.nextId++
     const p  = this.port
 
-    const statuslineScript = join(this.tmp, `ccc-statusline-${id}.js`)
-    writeFileSync(statuslineScript, STATUSLINE_RELAY_JS, 'utf8')
+    const statuslineScript = this.writeRelayScript()
 
     const statuslineCmd = this.adapter.buildStatusLineCommand(statuslineScript)
     const hookCmds      = this.adapter.buildHookCommands(id, p)
@@ -761,18 +780,18 @@ class SessionManager {
     // still on its way out and the user briefly sees two CCC windows.
     await new Promise(resolve => setTimeout(resolve, 800))
 
-    // Old script files are owned by the old entry; unlink before we
-    // re-create them with the same paths. Also stop the old transcript
-    // watcher so it doesn't keep running against a stale session record.
+    // The old entry's adapter-owned temp files are re-created with the same
+    // paths below, so unlink them first. The shared relay is deliberately not
+    // in this list. Also stop the old transcript watcher so it doesn't keep
+    // running against a stale session record.
     this.hooks.stopTranscript(sessionId)
-    for (const f of [...entry.cleanupPaths, entry.statuslineScript]) {
+    for (const f of entry.cleanupPaths) {
       if (!f) continue
       try { unlinkSync(f) } catch { /* ignore */ }
     }
 
     // Re-create statusline + hooks for the same sessionId.
-    const statuslineScript = join(this.tmp, `ccc-statusline-${sessionId}.js`)
-    writeFileSync(statuslineScript, STATUSLINE_RELAY_JS, 'utf8')
+    const statuslineScript = this.writeRelayScript()
     const statuslineCmd = this.adapter.buildStatusLineCommand(statuslineScript)
     const hookCmds      = this.adapter.buildHookCommands(sessionId, this.port)
     try { this.settings.inject(entry.workspace, hookCmds, statuslineCmd) } catch { /* non-fatal */ }
@@ -826,6 +845,22 @@ class SessionManager {
     this.adapter.injectKeystrokes({ pidFile: entry.pidFile, text, sessionId })
   }
 
+  // (Re)write the shared relay and hand back its path. Rewritten on every use
+  // so an upgraded relay body takes effect without the user reinstalling.
+  // Throws on an unwritable userData — callers keep whatever failure handling
+  // they had when this was a per-session writeFileSync.
+  private writeRelayScript(): string {
+    // Atomic: every session writes this same path, and Claude Code may be
+    // exec'ing it at that instant on behalf of a session already running.
+    // A plain writeFileSync truncates first, so a concurrent read could see
+    // a half-written file and lose a tick. Same tmp+rename pattern as
+    // ApiUsageStore.
+    const tmp = `${this.relayScript}.tmp`
+    writeFileSync(tmp, STATUSLINE_RELAY_JS, 'utf8')
+    renameSync(tmp, this.relayScript)
+    return this.relayScript
+  }
+
   private cleanup(entry: SessionEntry, sessionId: number): void {
     this.hooks.stopTranscript(sessionId)
     this.hooks.unregisterFullAccessSession(sessionId)
@@ -837,7 +872,10 @@ class SessionManager {
     if (entry.origin === 'ccc-managed' && entry.mode !== 'codex' && entry.workspace && !workspaceStillActive) {
       try { this.settings.restore(entry.workspace) } catch { /* ignore */ }
     }
-    for (const f of [...entry.cleanupPaths, entry.statuslineScript]) {
+    // NOT entry.statuslineScript — the relay is shared by every session on
+    // this install, and a workspace's settings.json goes on naming it after
+    // this session is gone. Deleting it here is what froze the siblings.
+    for (const f of entry.cleanupPaths) {
       if (!f) continue
       try { unlinkSync(f) } catch { /* ignore */ }
     }
