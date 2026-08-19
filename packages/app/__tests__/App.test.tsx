@@ -134,8 +134,12 @@ class AppTests {
           const island = document.querySelector('.island')!
 
           fireEvent.mouseDown(island, { button: 0, buttons: 1, clientX: 50, clientY: 10 })
-          await act(async () => { await new Promise(r => setTimeout(r, 450)) })
-          expect(document.querySelector('.island-wrapper--dragging')).toBeTruthy()
+          // Poll rather than sleeping past LONG_PRESS_MS and asserting once:
+          // under a contended full-suite run the app's 400ms timer can land
+          // after a fixed 450ms wait, which made this test flaky (~3 in 8 full
+          // runs). The sibling tests assert ABSENCE after the deadline, so a
+          // fixed wait is still correct for them.
+          await waitFor(() => expect(document.querySelector('.island-wrapper--dragging')).toBeTruthy())
 
           fireEvent.mouseMove(document, { buttons: 0, clientX: 60, clientY: 20 })
           expect(document.querySelector('.island-wrapper--dragging')).toBeNull()
