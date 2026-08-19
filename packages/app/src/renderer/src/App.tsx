@@ -12,6 +12,11 @@ import type { AccountUsage, AppState, OverlayMode, Session, ActionType, SessionN
 // All overlay-mode bounds are derived from these. Single source so the snap
 // zones, the resting positions, and the test mocks stay aligned. The pill is
 // always anchored to the top of the work area; only x/width/height change.
+// A metric feed silent for this long is treated as dead: statusLine fires on a
+// timer regardless of whether the session is doing anything (measured ~1 spawn
+// per second per terminal), so 2 minutes is ~24 missed ticks — not idleness.
+const STALE_AFTER_MS = 120_000
+
 const PILL_WIDTH       = 400
 const PILL_HEIGHT_BASE = 60
 // Window padding around the visible content for shadow space. Every
@@ -207,13 +212,11 @@ function sessionFromRestored(data: SessionRestored): Session {
     modelId:       data.modelId,
     name:          data.name,
     model:         model || '—',
-    contextPct:    m.contextPct ?? 0,
+    // Left undefined when the main process has nothing remembered: seeding 0
+    // would paint a confident "0%" for a session we have never measured.
+    ...(m.contextPct        !== undefined && { contextPct:        m.contextPct }),
     ...(m.contextTokens     !== undefined && { contextTokens:     m.contextTokens }),
     ...(m.contextWindowSize !== undefined && { contextWindowSize: m.contextWindowSize }),
-    usagePct:      m.usagePct5h ?? 0,
-    weeklyPct:     m.usagePct7d ?? 0,
-    reset5hAt:     m.reset5hAt ?? 0,
-    reset7dAt:     m.reset7dAt ?? 0,
     state:         'idle',
     notification:  null,
     pendingPermissions: [],
@@ -297,6 +300,19 @@ export function App(): JSX.Element {
   // indefinitely. One store, newest observation wins, so a single active
   // terminal keeps the readout honest for all of them.
   const [accountUsage, setAccountUsage] = useState<AccountUsage | null>(null)
+  // Arrival times, tracked purely to answer "is this feed still alive?".
+  // Deliberately separate from AccountUsage.observedAt, which is SAMPLE time
+  // and is used for ordering — conflating the two is what made the first cut of
+  // the account store collapse into last-writer-wins.
+  const metricsSeenAtRef = useRef<Map<number, number>>(new Map())
+  const [accountSeenAt, setAccountSeenAt] = useState<number | undefined>(undefined)
+  // Staleness has to become visible with no new events arriving, so re-render
+  // on a slow tick. Coarse on purpose: the threshold is 2 minutes.
+  const [nowTick, setNowTick] = useState(() => Date.now())
+  useEffect(() => {
+    const id = window.setInterval(() => setNowTick(Date.now()), 30_000)
+    return () => window.clearInterval(id)
+  }, [])
   const wrapperRef                            = useRef<HTMLDivElement>(null)
   // Per-session last-fired context-alert band (0 none / 1 ≥85% / 2 ≥95%) for
   // dedup, and a live mirror of activeId so the metrics listener (deps: []) can
@@ -1070,6 +1086,10 @@ export function App(): JSX.Element {
   // Listen for statusLine metrics (context%, 5h usage, 7d usage, real model name)
   useEffect(() => {
     const cleanup = window.ccc?.onSessionMetricsUpdated((update: SessionMetricsUpdate) => {
+      // A replay is the main process re-pushing what it remembered; it says
+      // nothing about whether the terminal's own feed is still alive, so it
+      // must not reset the staleness clock.
+      if (!update.replay) metricsSeenAtRef.current.set(update.sessionId, Date.now())
       if (update.model !== undefined) {
         setIsSwitchingModel(false)
       }
@@ -1099,6 +1119,7 @@ export function App(): JSX.Element {
       if (update.usagePct5h !== undefined || update.usagePct7d !== undefined) {
         const reporter = sessionsRef.current.find(s => s.id === update.sessionId)
         if (!reporter || reporter.mode === 'anthropic') {
+          if (!update.replay) setAccountSeenAt(Date.now())
           const at = update.observedAt ?? Date.now()
           setAccountUsage(prev => {
             // Two independent staleness tests, because neither alone is enough.
@@ -1115,18 +1136,20 @@ export function App(): JSX.Element {
             //    and cannot outrank a fresher live reading.
             if (prev) {
               const window = update.reset5hAt
-              if (window !== undefined && window > 0 && prev.reset5hAt > 0) {
-                if (window < prev.reset5hAt) return prev
-                if (window === prev.reset5hAt && at < prev.observedAt) return prev
+              const known  = prev.reset5hAt
+              if (window !== undefined && window > 0 && known !== undefined && known > 0) {
+                if (window < known) return prev
+                if (window === known && at < prev.observedAt) return prev
               } else if (at < prev.observedAt) return prev
             }
             // Merge field-by-field: a payload carrying only five_hour must not
-            // wipe a known seven_day.
+            // wipe a known seven_day. Never coalesce to 0 — an unmeasured
+            // value has to stay undefined so the UI can render "—".
             return {
-              usagePct:   update.usagePct5h ?? prev?.usagePct  ?? 0,
-              weeklyPct:  update.usagePct7d ?? prev?.weeklyPct ?? 0,
-              reset5hAt:  update.reset5hAt  ?? prev?.reset5hAt ?? 0,
-              reset7dAt:  update.reset7dAt  ?? prev?.reset7dAt ?? 0,
+              usagePct:   update.usagePct5h ?? prev?.usagePct,
+              weeklyPct:  update.usagePct7d ?? prev?.weeklyPct,
+              reset5hAt:  update.reset5hAt  ?? prev?.reset5hAt,
+              reset7dAt:  update.reset7dAt  ?? prev?.reset7dAt,
               observedAt: at,
             }
           })
@@ -1140,10 +1163,6 @@ export function App(): JSX.Element {
           ...(update.contextPct !== undefined && { contextPct: update.contextPct }),
           ...(update.contextTokens     !== undefined && { contextTokens:     update.contextTokens }),
           ...(update.contextWindowSize !== undefined && { contextWindowSize: update.contextWindowSize }),
-          ...(update.usagePct5h !== undefined && { usagePct:   update.usagePct5h }),
-          ...(update.usagePct7d !== undefined && { weeklyPct:  update.usagePct7d }),
-          ...(update.reset5hAt  !== undefined && { reset5hAt:  update.reset5hAt }),
-          ...(update.reset7dAt  !== undefined && { reset7dAt:  update.reset7dAt }),
         }
       }))
     })
@@ -1155,17 +1174,25 @@ export function App(): JSX.Element {
 
   const displayState: AppState = activeSession?.state ?? 'idle'
   const displayModel  = activeSession?.model ?? '—'
-  const contextPct        = activeSession?.contextPct ?? 0
+  const contextPct        = activeSession?.contextPct
   const contextTokens     = activeSession?.contextTokens
   const contextWindowSize = activeSession?.contextWindowSize
-  // 5h / weekly come from the account store, not the active session's private
-  // copy — see accountUsage. Non-Anthropic sessions have no Anthropic quota, so
-  // they keep their own (empty) values rather than borrowing the account's.
+  // 5h / weekly are account-level and live only in accountUsage — there is no
+  // per-session copy to fall back to. A non-Anthropic session has no Anthropic
+  // quota at all, so it gets undefined ("—") rather than the account's numbers.
   const showAccountUsage = activeSession?.mode === 'anthropic' && accountUsage !== null
-  const usagePct      = (showAccountUsage ? accountUsage.usagePct  : activeSession?.usagePct)  ?? 0
-  const weeklyPct     = (showAccountUsage ? accountUsage.weeklyPct : activeSession?.weeklyPct) ?? 0
-  const reset5hAt     = (showAccountUsage ? accountUsage.reset5hAt : activeSession?.reset5hAt) ?? 0
-  const reset7dAt     = (showAccountUsage ? accountUsage.reset7dAt : activeSession?.reset7dAt) ?? 0
+  const usagePct      = showAccountUsage ? accountUsage.usagePct  : undefined
+  const weeklyPct     = showAccountUsage ? accountUsage.weeklyPct : undefined
+  const reset5hAt     = showAccountUsage ? accountUsage.reset5hAt : undefined
+  const reset7dAt     = showAccountUsage ? accountUsage.reset7dAt : undefined
+  // Staleness is about the FEED, not the values: a number can legitimately sit
+  // unchanged for hours (nobody made an API call), but a statusLine that has
+  // stopped arriving means the channel is dead and the number on screen is a
+  // fossil. Arrival time is the right signal for that, and only for that.
+  const contextSeenAt = activeSession ? metricsSeenAtRef.current.get(activeSession.id) : undefined
+  const usageSeenAt   = showAccountUsage ? accountSeenAt : undefined
+  const contextStale  = contextPct !== undefined && contextSeenAt !== undefined && nowTick - contextSeenAt > STALE_AFTER_MS
+  const usageStale    = usagePct   !== undefined && usageSeenAt   !== undefined && nowTick - usageSeenAt   > STALE_AFTER_MS
   const notification  = activeSession?.notification ?? backgroundNotification
   // Active session's API usage snapshot (mode === 'api' only). Used by
   // Island to swap the second ring out for a session-cost display.
@@ -1324,11 +1351,6 @@ export function App(): JSX.Element {
       modelId:       defaultModelId,
       name:          basenameOf(workspace),
       model:         info?.name ?? '—',
-      contextPct:    0,
-      usagePct:      0,
-      weeklyPct:     0,
-      reset5hAt:     0,
-      reset7dAt:     0,
       state:         'idle',
       notification:  null,
       pendingPermissions: [],
@@ -1356,11 +1378,6 @@ export function App(): JSX.Element {
       modelId,
       name:           basenameOf(workspace),
       model:          modelId,
-      contextPct:     0,
-      usagePct:       0,
-      weeklyPct:      0,
-      reset5hAt:      0,
-      reset7dAt:      0,
       state:          'idle',
       notification:   null,
       pendingPermissions: [],
@@ -1523,11 +1540,6 @@ export function App(): JSX.Element {
         modelId:        pendingApiSwitch.modelId,
         name:           activeSession.name,
         model:          pendingApiSwitch.modelId,
-        contextPct:     0,
-        usagePct:       0,
-        weeklyPct:      0,
-        reset5hAt:      0,
-        reset7dAt:      0,
         state:          'idle',
         notification:   null,
         pendingPermissions: [],
@@ -1669,6 +1681,10 @@ export function App(): JSX.Element {
         contextWindowSize={contextWindowSize}
         usagePct={usagePct}
         weeklyPct={weeklyPct}
+        contextStale={contextStale}
+        usageStale={usageStale}
+        contextSeenAt={contextSeenAt}
+        usageSeenAt={usageSeenAt}
         reset5hAt={reset5hAt}
         reset7dAt={reset7dAt}
         activeSessionMode={activeSession?.mode ?? 'anthropic'}

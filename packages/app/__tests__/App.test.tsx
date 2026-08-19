@@ -5,7 +5,7 @@ import type { Session } from '../src/renderer/src/types'
 
 const baseSession: Session = {
   id: 1, name: 's', workspace: '/x', modelId: 'm', model: 'M',
-  contextPct: 0, usagePct: 0, weeklyPct: 0, reset5hAt: 0, reset7dAt: 0,
+  contextPct: 0,
   state: 'waiting',
   notification: { type: 'permission', hookKey: 'A', tool: 'Bash' },
   pendingPermissions: [
@@ -427,9 +427,15 @@ class AppTests {
       const mount = async (): Promise<{
         restore: (d: Record<string, unknown>) => void
         push: (u: Record<string, unknown>) => void
+        close: (id: number) => void
       }> => {
         let onRestored!: (d: Record<string, unknown>) => void
         let onMetrics!: (u: Record<string, unknown>) => void
+        // App subscribes to onSessionClosed from two separate effects; capture
+        // both here rather than digging into mock.calls, which accumulates
+        // across tests in this file and would hand back a callback belonging to
+        // an already-unmounted render.
+        const onClosed: ((id: number) => void)[] = []
         vi.mocked(window.ccc.onSessionRestored).mockImplementation((cb: unknown) => {
           onRestored = cb as (d: Record<string, unknown>) => void
           return () => {}
@@ -438,10 +444,15 @@ class AppTests {
           onMetrics = cb as (u: Record<string, unknown>) => void
           return () => {}
         })
+        vi.mocked(window.ccc.onSessionClosed).mockImplementation((cb: unknown) => {
+          onClosed.push(cb as (id: number) => void)
+          return () => {}
+        })
         await act(async () => { render(<App />) })
         return {
           restore: (d) => { act(() => { onRestored(d) }) },
           push:    (u) => { act(() => { onMetrics(u) }) },
+          close:   (id) => { act(() => { onClosed.forEach(cb => cb(id)) }) },
         }
       }
 
@@ -495,6 +506,33 @@ class AppTests {
 
         AppTests.openExpandedPanel()
         await waitFor(() => expect(screen.getByText('66%')).toBeInTheDocument())
+      })
+
+      // Before this, a session rebuilt with no remembered metrics rendered a
+      // confident "0" for context and 5h — a number the app had never measured.
+      it('shows — for a session whose metrics have never arrived', async () => {
+        const { restore } = await mount()
+        restore(restored(1))
+        expect([...document.querySelectorAll('.ring-label')].map(el => el.textContent)).toEqual(['—', '—'])
+      })
+
+      it('fills in the rings once a reading lands', async () => {
+        const { restore, push } = await mount()
+        restore(restored(1))
+        push({ sessionId: 1, contextPct: 0.42, usagePct5h: 0.71, observedAt: 1_000 })
+        expect([...document.querySelectorAll('.ring-label')].map(el => el.textContent)).toEqual(['42', '71'])
+      })
+
+      it('leaves 5h at — for an api session even when the account number is known', async () => {
+        const { restore, push, close } = await mount()
+        restore(restored(1))
+        restore(restored(2, 'api'))
+        push({ sessionId: 1, usagePct5h: 0.71, observedAt: 1_000 })
+
+        close(1)   // makes the api session active
+        // Context has no reading for session 2, and 5h must not borrow the
+        // account's Anthropic number for a non-Anthropic endpoint.
+        expect([...document.querySelectorAll('.ring-label')].map(el => el.textContent)).toEqual(['—', '—'])
       })
 
       // resets_at only ever moves forward for an account, so it settles

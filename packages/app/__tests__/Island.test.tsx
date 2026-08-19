@@ -10,10 +10,6 @@ const DEFAULT_SESSION: Session = {
   modelId:       'claude-sonnet-4-6',
   model:         'Claude Sonnet 4.6',
   contextPct:    0.3,
-  usagePct:      0,
-  weeklyPct:     0,
-  reset5hAt:     0,
-  reset7dAt:     0,
   state:         'streaming',
   notification:  null,
   pendingPermissions: [],
@@ -797,6 +793,65 @@ class IslandTests {
           })} />)
           fireEvent.mouseEnter(container.querySelector('.usage-cost-badge')!)
           expect(screen.getByText(/Session: 1\.2k → 3\.4k · \$0\.0050/)).toBeDefined()
+        })
+      })
+
+      // 0 used to double as the no-data sentinel: a session whose statusLine
+      // never arrived rendered a confident "0" that was indistinguishable from
+      // a real reading of zero usage.
+      describe('no-data and stale rendering', () => {
+        const ringLabels = (c: HTMLElement): (string | null)[] =>
+          [...c.querySelectorAll('.ring-wrap')].map(el => el.querySelector('.ring-label')?.textContent ?? null)
+
+        it('renders — for a metric that was never measured', () => {
+          const { container } = render(<Island {...IslandTests.makeProps({
+            contextPct: undefined, usagePct: undefined,
+          })} />)
+          expect(ringLabels(container)).toEqual(['—', '—'])
+        })
+
+        it('still renders a genuine zero as 0', () => {
+          const { container } = render(<Island {...IslandTests.makeProps({
+            contextPct: 0, usagePct: 0,
+          })} />)
+          expect(ringLabels(container)).toEqual(['0', '0'])
+        })
+
+        it('says "no data yet" on hover instead of 0%', () => {
+          const { container } = render(<Island {...IslandTests.makeProps({ usagePct: undefined })} />)
+          fireEvent.mouseEnter(container.querySelectorAll('.ring-hover-target')[1]!)
+          expect(screen.getByText('5h Usage no data yet')).toBeDefined()
+        })
+
+        it('dims a ring whose feed has gone quiet and dates it on hover', () => {
+          const { container } = render(<Island {...IslandTests.makeProps({
+            usagePct: 0.41, usageStale: true, usageSeenAt: Date.now() - 12 * 60_000,
+          })} />)
+          expect(container.querySelector('.ring-wrap--stale')).not.toBeNull()
+          fireEvent.mouseEnter(container.querySelectorAll('.ring-hover-target')[1]!)
+          expect(screen.getByText('5h Usage 41% · last seen 12m')).toBeDefined()
+        })
+
+        it('does not dim a ring whose feed is current', () => {
+          const { container } = render(<Island {...IslandTests.makeProps({ usagePct: 0.41 })} />)
+          expect(container.querySelector('.ring-wrap--stale')).toBeNull()
+        })
+
+        it('renders — and no bar fill for an unmeasured weekly usage', () => {
+          const { container } = render(<Island {...IslandTests.makeProps({
+            expanded: true, weeklyPct: undefined,
+          })} />)
+          expect(screen.getByText('—')).toBeDefined()
+          expect(container.querySelector('.bar-fill')).toBeNull()
+        })
+
+        // An api-mode session talks to a third-party endpoint and has no
+        // Anthropic quota; the block used to render an untouched-looking bar.
+        it('hides the weekly block entirely for an api session', () => {
+          const { container } = render(<Island {...IslandTests.makeProps({
+            expanded: true, activeSessionMode: 'api', weeklyPct: 0.5,
+          })} />)
+          expect(container.querySelector('.bar-wrap')).toBeNull()
         })
       })
 

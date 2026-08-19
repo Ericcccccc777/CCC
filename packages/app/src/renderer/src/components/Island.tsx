@@ -168,6 +168,35 @@ function shortName(model: string): string {
 //   >= 1d      → "Nd Mh Pm"
 // Returns null for past timestamps or invalid input so callers can fall
 // back to a percentage-only hint.
+// A percentage, or an em dash when the value was never measured. Zero is a
+// real reading and must stay distinguishable from "no data".
+function pctText(pct: number | undefined): string {
+  return pct === undefined ? '—' : `${Math.round(pct * 100)}%`
+}
+
+// How long ago a feed last reported, in the same shape as formatCountdown.
+// Returns null when we have never heard from it at all.
+export function formatAge(seenAtMs: number | undefined, nowMs = Date.now()): string | null {
+  if (!seenAtMs || !Number.isFinite(seenAtMs)) return null
+  const ms = nowMs - seenAtMs
+  if (ms < 60_000) return '<1m'
+  const totalMin = Math.floor(ms / 60_000)
+  const days  = Math.floor(totalMin / (60 * 24))
+  const hours = Math.floor((totalMin - days * 60 * 24) / 60)
+  const mins  = totalMin - days * 60 * 24 - hours * 60
+  if (days  > 0) return `${days}d ${hours}h`
+  if (hours > 0) return `${hours}h ${mins}m`
+  return `${mins}m`
+}
+
+// Append "· last seen 12m ago" when the feed behind a value has gone quiet, so
+// a number that stopped updating cannot pass for a live one.
+function withAge(text: string, stale: boolean | undefined, seenAt: number | undefined, t: { lastSeen: string }): string {
+  if (!stale) return text
+  const age = formatAge(seenAt)
+  return age ? `${text} · ${t.lastSeen} ${age}` : text
+}
+
 export function formatCountdown(targetMs: number, nowMs = Date.now()): string | null {
   if (!Number.isFinite(targetMs) || targetMs <= 0) return null
   const ms = targetMs - nowMs
@@ -278,13 +307,21 @@ interface IslandProps {
   selectedModelId:  string
   selectedEffort?:  ClaudeReasoningEffort
   isSwitchingModel: boolean
-  contextPct:       number
+  // Undefined = never measured. Rendered as "—", never as 0.
+  contextPct?:      number
   contextTokens?:      number
   contextWindowSize?:  number
-  usagePct:         number
-  weeklyPct:        number
-  reset5hAt:        number
-  reset7dAt:        number
+  usagePct?:        number
+  weeklyPct?:       number
+  reset5hAt?:       number
+  reset7dAt?:       number
+  // The feed behind these numbers has gone quiet (no statusLine in
+  // STALE_AFTER_MS). Values still render — they were true once — but dimmed,
+  // with their age in the hover hint.
+  contextStale?:    boolean
+  usageStale?:      boolean
+  contextSeenAt?:   number
+  usageSeenAt?:     number
   // 'api' = active session uses a third-party endpoint (DeepSeek in V1);
   // when this is 'api' and an apiUsage snapshot is present, the second
   // ring is replaced with a session-cost display per the user's request
@@ -345,7 +382,7 @@ interface IslandProps {
 
 export function Island({
   state, model, selectedModelId, isSwitchingModel, contextPct, contextTokens, contextWindowSize, usagePct, weeklyPct,
-  reset5hAt, reset7dAt, activeSessionMode, activeApiUsage,
+  reset5hAt, reset7dAt, contextStale, usageStale, contextSeenAt, usageSeenAt, activeSessionMode, activeApiUsage,
   expanded, showModelPicker, notification, sessions, activeSessionId,
   remotePopupSessionId, showAccessibilityWarning, apiProviders, apiBalances, apiUsage,
   overlayMode = 'default', overlayPeek = false, cornerDoneExpired = false, cornerWaitingDismissed = false, dragState = null,
@@ -529,13 +566,18 @@ export function Island({
                   // Show absolute "used / window (pct)" when statusLine gave us the
                   // figures (window size is per-model: 200k / 1M for Opus); fall back
                   // to percentage-only before the first API response / after /compact.
-                  contextTokens !== undefined && contextWindowSize
-                    ? `${t.contextHover} ${formatTokensCompact(contextTokens)} / ${formatTokensCompact(contextWindowSize)} (${Math.round(contextPct * 100)}%)`
-                    : `${t.contextHover} ${Math.round(contextPct * 100)}%`,
+                  contextPct === undefined
+                    ? `${t.contextHover} ${t.noData}`
+                    : withAge(
+                        contextTokens !== undefined && contextWindowSize
+                          ? `${t.contextHover} ${formatTokensCompact(contextTokens)} / ${formatTokensCompact(contextWindowSize)} (${pctText(contextPct)})`
+                          : `${t.contextHover} ${pctText(contextPct)}`,
+                        contextStale, contextSeenAt, t,
+                      ),
                 )}
                 onMouseLeave={() => setHoverHint(null)}
               >
-                <Ring pct={contextPct} size={22} label={`Context ${Math.round(contextPct * 100)}%`} />
+                <Ring pct={contextPct} stale={contextStale} size={22} label={`Context ${pctText(contextPct)}`} />
               </div>
             )}
             {activeSessionMode === 'codex' ? (
@@ -564,13 +606,16 @@ export function Island({
               <div
                 className="ring-hover-target"
                 onMouseEnter={() => {
-                  const pct  = `${Math.round(usagePct * 100)}%`
-                  const tail = formatCountdown(reset5hAt)
-                  setHoverHint(`${t.usage5hHover} ${pct}${tail ? ` · ${t.resetsIn} ${tail}` : ''}`)
+                  if (usagePct === undefined) { setHoverHint(`${t.usage5hHover} ${t.noData}`); return }
+                  const tail = reset5hAt === undefined ? null : formatCountdown(reset5hAt)
+                  setHoverHint(withAge(
+                    `${t.usage5hHover} ${pctText(usagePct)}${tail ? ` · ${t.resetsIn} ${tail}` : ''}`,
+                    usageStale, usageSeenAt, t,
+                  ))
                 }}
                 onMouseLeave={() => setHoverHint(null)}
               >
-                <Ring pct={usagePct} size={22} label={`5h Usage ${Math.round(usagePct * 100)}%`} />
+                <Ring pct={usagePct} stale={usageStale} size={22} label={`5h Usage ${pctText(usagePct)}`} />
               </div>
             )}
           </div>
@@ -622,19 +667,30 @@ export function Island({
               />
             )}
 
-            {activeSessionMode !== 'codex' && (
-              <div style={{ marginBottom: 12 }}>
+            {/* Anthropic only: an api-mode session talks to a third-party
+                endpoint and has no Anthropic quota, so rendering this block for
+                it showed an untouched-looking account bar that meant nothing. */}
+            {activeSessionMode === 'anthropic' && (
+              <div className={`weekly-block${weeklyPct !== undefined && usageStale ? ' is-stale' : ''}`} style={{ marginBottom: 12 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
                   <span className="expanded-label">{t.weeklyUsage}</span>
-                  <span className="expanded-value">{Math.round(weeklyPct * 100)}%</span>
+                  <span className="expanded-value">{pctText(weeklyPct)}</span>
                 </div>
                 <div className="bar-wrap">
-                  <div className="bar-fill" style={{ width: `${weeklyPct * 100}%`, background: barColor(weeklyPct) }} />
+                  {weeklyPct !== undefined && (
+                    <div className="bar-fill" style={{ width: `${weeklyPct * 100}%`, background: barColor(weeklyPct) }} />
+                  )}
                 </div>
                 {(() => {
-                  const tail = formatCountdown(reset7dAt)
-                  if (!tail) return null
-                  return <div className="usage-reset-hint">{t.resetsIn} {tail}</div>
+                  if (weeklyPct === undefined) return null
+                  const tail = reset7dAt === undefined ? null : formatCountdown(reset7dAt)
+                  const age  = usageStale ? formatAge(usageSeenAt) : null
+                  if (!tail && !age) return null
+                  return (
+                    <div className="usage-reset-hint">
+                      {tail ? `${t.resetsIn} ${tail}` : ''}{tail && age ? ' · ' : ''}{age ? `${t.lastSeen} ${age}` : ''}
+                    </div>
+                  )
                 })()}
               </div>
             )}

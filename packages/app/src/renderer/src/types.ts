@@ -55,11 +55,13 @@ export interface SessionNotification {
 // per-terminal on a statusLine, and an idle terminal keeps re-reporting a
 // stale snapshot. `observedAt` is what lets the newest report win.
 export interface AccountUsage {
-  usagePct:   number   // 0-1, five_hour
-  weeklyPct:  number   // 0-1, seven_day
-  reset5hAt:  number   // ms epoch, 0 = unknown
-  reset7dAt:  number   // ms epoch, 0 = unknown
-  observedAt: number   // ms epoch of the statusLine this came from
+  // Undefined means "never observed", which must not be conflated with 0 —
+  // an empty ring labelled "0" reads as a real reading of zero usage.
+  usagePct?:   number   // 0-1, five_hour
+  weeklyPct?:  number   // 0-1, seven_day
+  reset5hAt?:  number   // ms epoch
+  reset7dAt?:  number   // ms epoch
+  observedAt:  number   // ms epoch at which the CLI SAMPLED this (not arrival)
 }
 
 export interface Session {
@@ -68,17 +70,17 @@ export interface Session {
   modelId:              string  // mutable now: API restart can change it in place (Chunk C)
   name:                 string
   model:                string
-  contextPct:           number
+  // Undefined until a statusLine reports it. Deliberately NOT seeded to 0: a
+  // ring painted "0" is indistinguishable from a real zero reading, so a
+  // session whose feed never arrived looked like a confident measurement.
+  contextPct?:          number
   // Absolute context-window figures from statusLine (optional — older CLI builds
   // or early in a session may omit them). Drives the "137k / 1M" hover.
   contextTokens?:       number
   contextWindowSize?:   number
-  usagePct:             number
-  weeklyPct:            number
-  // Reset timestamps (ms epoch) for the 5h / 7d rate-limit windows;
-  // 0 = unknown (older Claude Code builds don't surface them).
-  reset5hAt:            number
-  reset7dAt:            number
+  // NOTE: no per-session 5h / weekly fields. Those are account-level, and
+  // keeping a private copy per session is what made terminals disagree; they
+  // live in a single AccountUsage store reconciled across terminals.
   state:                SessionLifecycleState
   notification:         SessionNotification | null
   // Queue of unanswered parallel permission requests. When Claude makes

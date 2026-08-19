@@ -796,6 +796,144 @@ class HookServerTimeoutTests {
         expect(server.lastKnownMetrics(1)).toMatchObject({ contextPct: 0.42, usagePct5h: 0.30, usagePct7d: 0.55 })
       })
 
+      // The CLI uses null for unpopulated objects. A guard of `cw !== undefined`
+      // lets null through and dereferences it — and because handleStatusLine
+      // replies BEFORE it parses, the resulting throw reached the request
+      // catch with the response already sent, which then threw
+      // ERR_HTTP_HEADERS_SENT from inside the catch where nothing handles it.
+      describe('hostile statusLine payloads', () => {
+        const postStatusLine = (body: object): Promise<number> =>
+          new Promise<number>((resolve, reject) => {
+            const json = JSON.stringify(body)
+            const req = http.request({
+              hostname: '127.0.0.1', port: livePort, path: '/statusline', method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(json) },
+            }, (res: http.IncomingMessage) => {
+              res.on('data', () => { /* drain */ })
+              res.on('end',  () => { resolve(res.statusCode ?? 0) })
+            })
+            req.on('error', reject)
+            req.write(json)
+            req.end()
+          })
+
+        let livePort: number
+        let live: HookServer
+        let uncaught: unknown[]
+
+        beforeEach(async () => {
+          uncaught = []
+          process.on('uncaughtException', (e) => { uncaught.push(e) })
+          live = new HookServer(80)
+          live.attachWindow({
+            webContents: { send: (): void => { /* noop */ } },
+            isDestroyed: (): boolean => false,
+          } as unknown as Parameters<HookServer['attachWindow']>[0])
+          livePort = await live.start()
+        })
+        afterEach(() => { live.stop(); process.removeAllListeners('uncaughtException') })
+
+        const shapes: Array<[string, unknown]> = [
+          ['context_window: null', { context_window: null }],
+          ['context_window: a string', { context_window: 'nope' }],
+          ['context_window: an empty object', { context_window: {} }],
+          ['rate_limits: null', { rate_limits: null }],
+          ['model: null', { model: null }],
+          ['data: null', null],
+        ]
+
+        for (const [name, data] of shapes) {
+          it(`survives ${name} without an uncaught error`, async () => {
+            const code = await postStatusLine({ sessionId: 1, data })
+            expect(code).toBe(200)
+            // Still serving afterwards — a thrown handler must not wedge it.
+            expect(await postStatusLine({ sessionId: 1, data: { model: { display_name: 'Opus 4.8' } } })).toBe(200)
+            expect(uncaught).toEqual([])
+          })
+        }
+
+        // The headersSent guard in the request catch is defence-in-depth: with
+        // the null guard above in place nothing throws after the reply, so it
+        // cannot be observed from outside. What IS observable is that the
+        // normal error path still works — a body that fails to parse throws
+        // before any handler replies, so 400 is still returned.
+        it('still answers 400 for a body that is not JSON', async () => {
+          const bad = '{ nope, '
+          const code = await new Promise<number>((resolve, reject) => {
+            const req = http.request({
+              hostname: '127.0.0.1', port: livePort, path: '/statusline', method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(bad) },
+            }, (res: http.IncomingMessage) => {
+              res.on('data', () => { /* drain */ })
+              res.on('end',  () => { resolve(res.statusCode ?? 0) })
+            })
+            req.on('error', reject)
+            req.end(bad)
+          })
+          expect(code).toBe(400)
+          expect(uncaught).toEqual([])
+        })
+
+        // The discriminating test. A throw at the context block is silent once
+        // the response has already been sent, so "no uncaught error" is not
+        // enough — the payload is simply dropped. Everything parsed AFTER the
+        // context block is what proves the handler ran to completion.
+        it('still parses the rest of a payload whose context_window is null', async () => {
+          await postStatusLine({
+            sessionId: 1,
+            data: {
+              context_window: null,
+              model: { display_name: 'Opus 4.8' },
+              rate_limits: { five_hour: { used_percentage: 42 }, seven_day: { used_percentage: 7 } },
+            },
+          })
+          expect(live.lastKnownMetrics(1)).toMatchObject({ usagePct5h: 0.42, usagePct7d: 0.07 })
+          expect(live.lastKnownModel(1)).toBe('Opus 4.8')
+        })
+
+        it('treats a null context_window as unknown, not empty', async () => {
+          await postStatusLine({ sessionId: 1, data: { context_window: { used_percentage: 90 } } })
+          await postStatusLine({ sessionId: 1, data: { context_window: null } })
+          // Not 0 (that would be the "empty context" reading) and not lost.
+          expect(live.lastKnownMetrics(1)).toMatchObject({ contextPct: 0.9 })
+          // Without the null guard the payload throws instead of being
+          // interpreted, which leaves contextPct at 0.9 too — so the assertion
+          // above cannot tell the two apart on its own.
+          expect(uncaught).toEqual([])
+        })
+      })
+
+      // An EMPTY context is not an UNKNOWN one. After /clear or /compact the CLI
+      // reports used_percentage: null with both token totals at 0; treating that
+      // as "no reading" left the renderer painting the pre-clear percentage.
+      describe('empty vs unknown context', () => {
+        it('reports 0 when the context is genuinely empty (post-/clear shape)', () => {
+          handle(1, { context_window: { used_percentage: 90, total_input_tokens: 180000, total_output_tokens: 20 } })
+          handle(1, {
+            context_window: {
+              total_input_tokens: 0, total_output_tokens: 0,
+              current_usage: null, used_percentage: null, context_window_size: 1000000,
+            },
+          })
+          expect(metricsSent[1]!.contextPct).toBe(0)
+          expect(metricsSent[1]!.contextTokens).toBe(0)
+          expect(server.lastKnownMetrics(1)).toMatchObject({ contextPct: 0, contextTokens: 0 })
+        })
+
+        it('leaves the previous reading alone when context_window is absent entirely', () => {
+          handle(1, { context_window: { used_percentage: 90, total_input_tokens: 180000, total_output_tokens: 20 } })
+          handle(1, { model: { display_name: 'Opus 4.8' } })
+          expect(metricsSent[1]!.contextPct).toBeUndefined()
+          expect(server.lastKnownMetrics(1)).toMatchObject({ contextPct: 0.9 })
+        })
+
+        it('does not fabricate a zero when tokens are reported but the percentage is not', () => {
+          handle(1, { context_window: { total_input_tokens: 500, total_output_tokens: 10 } })
+          expect(metricsSent[0]!.contextPct).toBeUndefined()
+          expect(metricsSent[0]!.contextTokens).toBe(510)
+        })
+      })
+
       // observedAt orders account-level 5h/7d reports across terminals. It must
       // mean "when the CLI sampled", not "when the POST arrived": Claude Code
       // holds rate_limits in a per-process field with no periodic refresh, so

@@ -325,7 +325,14 @@ export class HookServer {
         } else {
           res.writeHead(404); res.end()
         }
-      } catch { res.writeHead(400); res.end() }
+      } catch {
+        // Handlers reply before they finish parsing, so by the time a throw
+        // lands here the response may already be sent. Writing a second set of
+        // headers throws ERR_HTTP_HEADERS_SENT from inside this catch, where
+        // nothing can catch it — one malformed payload would take out the
+        // whole main process instead of one metrics update.
+        if (!res.headersSent) { res.writeHead(400); res.end() }
+      }
     })
   }
 
@@ -362,17 +369,31 @@ export class HookServer {
     // waiting for the next statusLine (see lastModel / lastKnownModel).
     if (model) this.lastModel.set(sessionId, model)
 
+    // `| null` is deliberate: this is a cast over untrusted relay JSON, and the
+    // CLI uses null for unpopulated objects (see `current_usage: null` in the
+    // post-/clear payload). Without null in the type, a `cw !== undefined`
+    // guard compiles fine and dereferences null at runtime.
     const cw       = data['context_window'] as {
       used_percentage?: number; context_window_size?: number
       total_input_tokens?: number; total_output_tokens?: number
-    } | undefined
-    const contextPct = typeof cw?.used_percentage === 'number' ? cw.used_percentage / 100 : undefined
+    } | null | undefined
     const contextWindowSize = typeof cw?.context_window_size === 'number' ? cw.context_window_size : undefined
     // Current context tokens = input (incl. cache) + output, per statusLine
     // (as of CLI 2.1.132 these reflect current usage, not cumulative).
     const inTok  = typeof cw?.total_input_tokens  === 'number' ? cw.total_input_tokens  : 0
     const outTok = typeof cw?.total_output_tokens === 'number' ? cw.total_output_tokens : 0
-    const contextTokens = (inTok > 0 || outTok > 0) ? inTok + outTok : undefined
+    // An EMPTY context is not an UNKNOWN one. Right after /clear or /compact,
+    // and at launch, the CLI reports `used_percentage: null` with both token
+    // totals at 0. Treating that as "no reading" left the renderer painting the
+    // pre-clear percentage — the session looked 90% full seconds after being
+    // emptied, and the context-pressure alert stayed latched (it only re-arms
+    // below 80%). A payload with no `context_window` block at all — or a null
+    // one — is still genuinely unknown and leaves the previous value alone.
+    const contextEmpty = cw != null && typeof cw.used_percentage !== 'number' && inTok === 0 && outTok === 0
+    const contextPct = typeof cw?.used_percentage === 'number'
+      ? cw.used_percentage / 100
+      : contextEmpty ? 0 : undefined
+    const contextTokens = (inTok > 0 || outTok > 0) ? inTok + outTok : (contextEmpty ? 0 : undefined)
 
     const rl = data['rate_limits'] as Record<string, unknown> | undefined
     const fiveHour = rl?.['five_hour'] as Record<string, unknown> | undefined

@@ -960,6 +960,12 @@ body {
   transition: stroke-dashoffset 1s cubic-bezier(0.4, 0, 0.2, 1), stroke 0.5s;
 }
 
+/* Dead-feed dimming. A metric whose statusLine stopped arriving keeps its last
+   value on screen — it was true once — but must not read as live. Never-measured
+   values render "—" instead (see Ring / pctText), which needs no styling. */
+.ring-wrap--stale,
+.weekly-block.is-stale { opacity: 0.42; }
+
 .ring-label {
   position: absolute;
   inset: 0;

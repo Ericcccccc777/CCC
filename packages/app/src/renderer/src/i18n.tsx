@@ -110,6 +110,10 @@ export interface Translations {
   usage5hHover:   string
   sessionHover:   string
   resetsIn:       string
+  // Shown in place of a percentage that has never been measured, and to date
+  // a value whose feed has gone quiet.
+  noData:         string
+  lastSeen:       string
   harnessTooltip: string
   // macOS Accessibility banner (only shown when permission missing on darwin)
   accessibilityBannerTitle: string
@@ -315,6 +319,8 @@ const en: Translations = {
   usage5hHover:   '5h Usage',
   sessionHover:   'Session:',
   resetsIn:       'resets in',
+  noData:         'no data yet',
+  lastSeen:       'last seen',
   harnessTooltip: 'CCC-Harness',
   accessibilityBannerTitle: 'macOS Accessibility permission required',
   accessibilityBannerHint:  'Open System Settings → Privacy & Security → Accessibility, then enable CCC. Without it, model switching and message replies silently fail.',
@@ -511,6 +517,8 @@ const zh: Translations = {
   usage5hHover:   '5 小时用量',
   sessionHover:   '本次会话:',
   resetsIn:       '重置剩余',
+  noData:         '暂无数据',
+  lastSeen:       '最后更新于',
   harnessTooltip: 'CCC-Harness',
   accessibilityBannerTitle: '需要 macOS 辅助功能权限',
   accessibilityBannerHint:  '打开"系统设置 → 隐私与安全性 → 辅助功能"，然后启用 CCC。未授权时，切换模型和回复消息会静默失败。',
@@ -707,6 +715,8 @@ const ko: Translations = {
   usage5hHover:   '5시간 사용량',
   sessionHover:   '이번 세션:',
   resetsIn:       '리셋까지',
+  noData:         '데이터 없음',
+  lastSeen:       '마지막 수신',
   harnessTooltip: 'CCC-Harness',
   accessibilityBannerTitle: 'macOS 손쉬운 사용 권한 필요',
   accessibilityBannerHint:  '시스템 설정 → 개인정보 보호 및 보안 → 손쉬운 사용에서 CCC를 활성화하세요. 권한 없이는 모델 전환과 답장이 조용히 실패합니다.',
