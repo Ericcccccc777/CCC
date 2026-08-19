@@ -42,6 +42,13 @@ export interface SessionMetrics {
 export interface SessionMetricsUpdate extends SessionMetrics {
   sessionId:    number
   model?:       string   // display_name from Claude Code
+  // True when this is a replay of the last-known values (the on-wake
+  // rebroadcast), not a fresh statusLine observation. The renderer still
+  // merges the numbers — repainting a blanked session is the whole point —
+  // but must not treat a replayed contextPct as a new band crossing, or
+  // waking the machine pops the compact/hand-off prompt off a reading the
+  // session already had before it slept.
+  replay?:      boolean
 }
 
 export type SessionMode = 'anthropic' | 'api' | 'codex'

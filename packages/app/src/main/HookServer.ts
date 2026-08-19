@@ -279,7 +279,7 @@ export class HookServer {
       const model   = this.lastModel.get(sessionId)
       const metrics = this.lastMetrics.get(sessionId)
       if (!model && !metrics) continue
-      const update: SessionMetricsUpdate = { sessionId, ...(model ? { model } : {}), ...metrics }
+      const update: SessionMetricsUpdate = { sessionId, replay: true, ...(model ? { model } : {}), ...metrics }
       try { this.win?.webContents.send(IPC.SESSION_METRICS_UPDATED, update) } catch { /* window gone */ }
     }
   }

@@ -1062,7 +1062,11 @@ export function App(): JSX.Element {
       // Context-pressure alert off the REAL statusLine %. Bands: 1 = ≥85%,
       // 2 = ≥95%. Fire once per band increase, only for the active session;
       // re-arm when context drops back below 80% (e.g. after a /compact).
-      if (update.contextPct !== undefined) {
+      // Replays (the on-wake rebroadcast) are skipped: contextAlertLevelRef is
+      // per-renderer-mount, so a rebuilt session's ref is empty and a replayed
+      // ≥85% would read as a first-time crossing and pop the prompt on wake
+      // for a context the user has already been warned about.
+      if (update.contextPct !== undefined && !update.replay) {
         const sid = update.sessionId
         const pct = update.contextPct
         const prevBand = contextAlertLevelRef.current.get(sid) ?? 0

@@ -657,8 +657,8 @@ class HookServerTimeoutTests {
         metricsSent.length = 0
         server.rebroadcastSessionMetrics()
         expect(metricsSent).toEqual([
-          { sessionId: 1, model: 'Opus 4.8' },
-          { sessionId: 2, model: 'Sonnet 5' },
+          { sessionId: 1, replay: true, model: 'Opus 4.8' },
+          { sessionId: 2, replay: true, model: 'Sonnet 5' },
         ])
       })
 
@@ -666,7 +666,7 @@ class HookServerTimeoutTests {
         server.seedModel(7, 'Fable 5')
         expect(server.lastKnownModel(7)).toBe('Fable 5')
         server.rebroadcastSessionMetrics()
-        expect(metricsSent).toContainEqual({ sessionId: 7, model: 'Fable 5' })
+        expect(metricsSent).toContainEqual({ sessionId: 7, replay: true, model: 'Fable 5' })
       })
 
       it('stopTranscript forgets the remembered model even with no transcript watcher', () => {
@@ -734,7 +734,7 @@ class HookServerTimeoutTests {
         metricsSent.length = 0
         server.rebroadcastSessionMetrics()
         expect(metricsSent).toEqual([
-          { sessionId: 1, model: 'Opus 4.8', contextPct: 0.42, usagePct5h: 0.30, usagePct7d: 0.55 },
+          { sessionId: 1, replay: true, model: 'Opus 4.8', contextPct: 0.42, usagePct5h: 0.30, usagePct7d: 0.55 },
         ])
       })
 
@@ -742,14 +742,14 @@ class HookServerTimeoutTests {
         handle(9, { context_window: { used_percentage: 12 } })
         metricsSent.length = 0
         server.rebroadcastSessionMetrics()
-        expect(metricsSent).toEqual([{ sessionId: 9, contextPct: 0.12 }])
+        expect(metricsSent).toEqual([{ sessionId: 9, replay: true, contextPct: 0.12 }])
       })
 
       it('seedMetrics primes the cache (used when restoring a persisted session cold)', () => {
         server.seedMetrics(7, { contextPct: 0.5, usagePct5h: 0.25, usagePct7d: 0.6 })
         expect(server.lastKnownMetrics(7)).toEqual({ contextPct: 0.5, usagePct5h: 0.25, usagePct7d: 0.6 })
         server.rebroadcastSessionMetrics()
-        expect(metricsSent).toContainEqual({ sessionId: 7, contextPct: 0.5, usagePct5h: 0.25, usagePct7d: 0.6 })
+        expect(metricsSent).toContainEqual({ sessionId: 7, replay: true, contextPct: 0.5, usagePct5h: 0.25, usagePct7d: 0.6 })
       })
 
       it('stopTranscript forgets the remembered numbers even with no transcript watcher', () => {

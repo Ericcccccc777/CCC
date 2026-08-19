@@ -360,6 +360,56 @@ class AppTests {
 
     // Pure unit tests for the parallel-permission queue helper. Renders
     // no DOM — exercises the state-transition table directly.
+    // The on-wake rebroadcast replays the last-known metrics so a session
+    // rebuilt during sleep repaints immediately. contextAlertLevelRef is
+    // per-renderer-mount, so without the replay marker a replayed >=85% reads
+    // as a first-time band crossing and pops the compact/hand-off prompt on
+    // every wake, off a reading the user was already warned about.
+    describe('context-pressure alert vs the on-wake metrics replay', () => {
+      const restored = {
+        sessionId: 42, workspace: '/w', name: 'w', modelId: 'opus',
+        mode: 'anthropic' as const, origin: 'ccc-managed' as const, capability: 'full' as const,
+      }
+
+      const mount = async (): Promise<{ push: (u: Record<string, unknown>) => void }> => {
+        let onRestored!: (d: typeof restored) => void
+        let onMetrics!: (u: Record<string, unknown>) => void
+        vi.mocked(window.ccc.onSessionRestored).mockImplementation((cb: unknown) => {
+          onRestored = cb as (d: typeof restored) => void
+          return () => {}
+        })
+        vi.mocked(window.ccc.onSessionMetricsUpdated).mockImplementation((cb: unknown) => {
+          onMetrics = cb as (u: Record<string, unknown>) => void
+          return () => {}
+        })
+        // Flush the mount-time bridge promises (capabilities / CLI detect) so a
+        // later synchronous assertion doesn't race a state update out of act().
+        await act(async () => { render(<App />) })
+        act(() => { onRestored(restored) })
+        return { push: (u) => { act(() => { onMetrics(u) }) } }
+      }
+
+      it('does not fire the prompt for a replayed high context reading', async () => {
+        const { push } = await mount()
+        push({ sessionId: 42, contextPct: 0.92, replay: true })
+        expect(screen.queryByRole('dialog')).toBeNull()
+      })
+
+      it('still fires the prompt for a live high context reading', async () => {
+        const { push } = await mount()
+        push({ sessionId: 42, contextPct: 0.92 })
+        await waitFor(() => expect(screen.getByRole('dialog')).toBeInTheDocument())
+      })
+
+      it('a replay does not consume the band, so the next live reading still fires', async () => {
+        const { push } = await mount()
+        push({ sessionId: 42, contextPct: 0.92, replay: true })
+        expect(screen.queryByRole('dialog')).toBeNull()
+        push({ sessionId: 42, contextPct: 0.92 })
+        await waitFor(() => expect(screen.getByRole('dialog')).toBeInTheDocument())
+      })
+    })
+
     describe('advancePermissionQueue (parallel permissions)', () => {
       it('pops the head of the queue and keeps state=waiting when more remain', () => {
         const result = advancePermissionQueue(baseSession, { stateWhenEmpty: 'streaming' })
