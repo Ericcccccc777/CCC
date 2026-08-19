@@ -37,6 +37,13 @@ export interface SessionMetrics {
   // these into countdown hints on hover.
   reset5hAt?:   number
   reset7dAt?:   number
+  // Wall-clock ms at which this observation was taken. Rides with the cached
+  // metrics (so a replay carries the ORIGINAL time, not the replay's) and
+  // through persistence. The renderer needs it because 5h/7d are account-level
+  // but arrive per-terminal: an idle terminal re-emits a stale snapshot
+  // indefinitely, so freshness has to be carried explicitly rather than
+  // inferred from the values.
+  observedAt?:  number
 }
 
 export interface SessionMetricsUpdate extends SessionMetrics {

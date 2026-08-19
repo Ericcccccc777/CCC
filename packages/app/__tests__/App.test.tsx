@@ -410,6 +410,129 @@ class AppTests {
       })
     })
 
+    // 5h and weekly usage belong to the ACCOUNT, but they only ever arrive
+    // per-terminal on a statusLine. Storing them per session and painting the
+    // active one's private copy meant N terminals disagreed, and a terminal
+    // whose feed had died showed its last value forever.
+    describe('account-level 5h / weekly reconciliation', () => {
+      const restored = (sessionId: number, mode: 'anthropic' | 'api' = 'anthropic'): Record<string, unknown> => ({
+        sessionId, workspace: '/w', name: 'w', modelId: 'opus',
+        mode, origin: 'ccc-managed', capability: 'full',
+      })
+
+      const mount = async (): Promise<{
+        restore: (d: Record<string, unknown>) => void
+        push: (u: Record<string, unknown>) => void
+      }> => {
+        let onRestored!: (d: Record<string, unknown>) => void
+        let onMetrics!: (u: Record<string, unknown>) => void
+        vi.mocked(window.ccc.onSessionRestored).mockImplementation((cb: unknown) => {
+          onRestored = cb as (d: Record<string, unknown>) => void
+          return () => {}
+        })
+        vi.mocked(window.ccc.onSessionMetricsUpdated).mockImplementation((cb: unknown) => {
+          onMetrics = cb as (u: Record<string, unknown>) => void
+          return () => {}
+        })
+        await act(async () => { render(<App />) })
+        return {
+          restore: (d) => { act(() => { onRestored(d) }) },
+          push:    (u) => { act(() => { onMetrics(u) }) },
+        }
+      }
+
+      // Both rings share .ring-wrap; pick the 5h one by its title.
+      const ring = (): string | null =>
+        [...document.querySelectorAll('.ring-wrap')]
+          .map(el => el.getAttribute('title'))
+          .find(t => t?.startsWith('5h Usage')) ?? null
+
+      it('shows the freshest reading from ANY terminal, not the active one’s copy', async () => {
+        const { restore, push } = await mount()
+        restore(restored(1))   // becomes the active session
+        restore(restored(2))
+
+        push({ sessionId: 1, usagePct5h: 0.40, observedAt: 1_000 })
+        expect(ring()).toBe('5h Usage 40%')
+
+        // A background terminal reports a newer, higher number. The account is
+        // at 71% for every terminal, including the active one.
+        push({ sessionId: 2, usagePct5h: 0.71, observedAt: 2_000 })
+        expect(ring()).toBe('5h Usage 71%')
+      })
+
+      it('an older reading never overwrites a newer one', async () => {
+        const { restore, push } = await mount()
+        restore(restored(1))
+        restore(restored(2))
+
+        push({ sessionId: 2, usagePct5h: 0.71, observedAt: 2_000 })
+        // Terminal 1 has been idle; the CLI keeps re-emitting its pre-sleep
+        // snapshot, so this arrives later but was observed earlier.
+        push({ sessionId: 1, usagePct5h: 0.40, observedAt: 1_000 })
+        expect(ring()).toBe('5h Usage 71%')
+      })
+
+      it('an on-wake replay carries its original time and cannot clobber a live reading', async () => {
+        const { restore, push } = await mount()
+        restore(restored(1))
+
+        push({ sessionId: 1, usagePct5h: 0.71, observedAt: 5_000 })
+        push({ sessionId: 1, usagePct5h: 0.10, observedAt: 4_000, replay: true })
+        expect(ring()).toBe('5h Usage 71%')
+      })
+
+      it('merges field-by-field so a five_hour-only payload keeps a known seven_day', async () => {
+        const { restore, push } = await mount()
+        restore(restored(1))
+
+        push({ sessionId: 1, usagePct5h: 0.20, usagePct7d: 0.66, observedAt: 1_000 })
+        push({ sessionId: 1, usagePct5h: 0.25, observedAt: 2_000 })
+
+        AppTests.openExpandedPanel()
+        await waitFor(() => expect(screen.getByText('66%')).toBeInTheDocument())
+      })
+
+      // resets_at only ever moves forward for an account, so it settles
+      // staleness even when the sample times don't. This is what stops a
+      // pre-sleep snapshot from resurrecting once the window has turned over.
+      it('rejects a reading from a previous 5h window whatever its timestamp', async () => {
+        const { restore, push } = await mount()
+        restore(restored(1))
+        restore(restored(2))
+
+        push({ sessionId: 1, usagePct5h: 0.71, reset5hAt: 2_000, observedAt: 1_000 })
+        // Terminal 2 was asleep through the rollover: higher number, later
+        // sample time, but an older window.
+        push({ sessionId: 2, usagePct5h: 0.95, reset5hAt: 1_000, observedAt: 5_000 })
+        expect(ring()).toBe('5h Usage 71%')
+      })
+
+      it('accepts a reading from a newer 5h window even if sampled earlier', async () => {
+        const { restore, push } = await mount()
+        restore(restored(1))
+        restore(restored(2))
+
+        push({ sessionId: 1, usagePct5h: 0.95, reset5hAt: 1_000, observedAt: 9_000 })
+        // The window rolled over; usage resets. Sampled earlier in wall-clock
+        // terms, but unambiguously the newer window.
+        push({ sessionId: 2, usagePct5h: 0.03, reset5hAt: 2_000, observedAt: 5_000 })
+        expect(ring()).toBe('5h Usage 3%')
+      })
+
+      // An api-mode session talks to a third-party endpoint and has no
+      // Anthropic quota, so it must never write the account numbers.
+      it('ignores rate limits reported for a non-Anthropic session', async () => {
+        const { restore, push } = await mount()
+        restore(restored(1))
+        restore(restored(2, 'api'))
+
+        push({ sessionId: 1, usagePct5h: 0.71, observedAt: 1_000 })
+        push({ sessionId: 2, usagePct5h: 0.05, observedAt: 9_000 })
+        expect(ring()).toBe('5h Usage 71%')
+      })
+    })
+
     describe('advancePermissionQueue (parallel permissions)', () => {
       it('pops the head of the queue and keeps state=waiting when more remain', () => {
         const result = advancePermissionQueue(baseSession, { stateWhenEmpty: 'streaming' })

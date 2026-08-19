@@ -1,7 +1,7 @@
 import * as http from 'http'
 import { AddressInfo } from 'net'
 import { BrowserWindow, ipcMain } from 'electron'
-import { statSync, openSync, readSync, closeSync } from 'fs'
+import { statSync, openSync, readSync, closeSync, writeFileSync, unlinkSync } from 'fs'
 import { IPC } from '../shared/ipc-channels'
 import type { SessionStateUpdate, SessionLifecycleState, ToolPermission, SessionMetrics, SessionMetricsUpdate } from '../shared/session-state'
 
@@ -98,8 +98,14 @@ export class HookServer {
   // 120s gives reasonable headroom without breaking AskUserQuestion's
   // terminal-picker fallback semantics (the picker just takes longer to
   // appear if the user is genuinely AFK).
-  constructor(preToolUseTimeoutMs = 120_000) {
+  // Where to publish the listening port so already-running terminals can find
+  // it (see buildStatusLineRelay). Optional: unit tests construct a server
+  // without one and no file is written.
+  private readonly portFilePath: string | null
+
+  constructor(preToolUseTimeoutMs = 120_000, portFilePath?: string) {
     this.preToolUseTimeoutMs = preToolUseTimeoutMs
+    this.portFilePath        = portFilePath ?? null
   }
 
   setTranscriptSink(sink: (sessionId: number, parsed: Record<string, unknown>) => void): void {
@@ -151,6 +157,12 @@ export class HookServer {
     return new Promise(resolve => {
       this.server.listen(0, '127.0.0.1', () => {
         this.port = (this.server.address() as AddressInfo).port
+        // Publish the port for terminals that outlived a previous app run.
+        // Theirs is an ephemeral port frozen into a shell env we cannot touch;
+        // this file is the only channel that reaches them.
+        if (this.portFilePath) {
+          try { writeFileSync(this.portFilePath, String(this.port), 'utf8') } catch { /* relay falls back to CCC_PORT */ }
+        }
         this.idleSweepTimer = setInterval(() => this.sweepIdle(), HookServer.IDLE_SWEEP_MS)
         resolve(this.port)
       })
@@ -201,6 +213,11 @@ export class HookServer {
     this.fullAccessSessions.clear()
     this.remoteSessions.clear()
     this.server.close()
+    // Drop the published port: nothing is listening on it now, and leaving it
+    // behind would point every relay at a port another process may later bind.
+    if (this.portFilePath) {
+      try { unlinkSync(this.portFilePath) } catch { /* already gone */ }
+    }
     ipcMain.removeAllListeners(IPC.HOOK_DECISION)
     ipcMain.removeAllListeners(IPC.ALLOW_TOOL_ALWAYS)
     ipcMain.removeAllListeners(IPC.HARNESS_ANSWER)
@@ -400,12 +417,47 @@ export class HookServer {
     const reset5hAt = parseReset(fiveHour)
     const reset7dAt = parseReset(sevenDay)
 
+    // `observedAt` means "when this session's CLI last SAMPLED the rate
+    // limits" — NOT when this POST arrived. The distinction is the whole point.
+    // Claude Code keeps rate_limits in a per-process field written only when it
+    // receives an API response; there is no periodic refresh. So a terminal
+    // sitting idle re-emits the very same snapshot on every ~5s statusLine
+    // tick, and stamping arrival time would make each stale re-emit look like
+    // the freshest reading in the app — the renderer's newest-wins
+    // reconciliation would collapse into last-writer-wins, which is worse than
+    // no reconciliation at all. A CHANGE in the reported values is the only
+    // evidence available that the CLI took a fresh sample, so the timestamp
+    // advances then and only then.
+    //
+    // Gated on the rate-limit fields alone: contextPct moves constantly while a
+    // session works, and observedAt exists solely to order account-level 5h/7d
+    // reports against each other.
+    const prev = this.lastMetrics.get(sessionId)
+    const carriesRateLimits = usagePct5h !== undefined || usagePct7d !== undefined
+    const sameSample =
+      prev?.observedAt !== undefined
+      && (usagePct5h === undefined || prev.usagePct5h === usagePct5h)
+      && (usagePct7d === undefined || prev.usagePct7d === usagePct7d)
+      && (reset5hAt  === undefined || prev.reset5hAt  === reset5hAt)
+      && (reset7dAt  === undefined || prev.reset7dAt  === reset7dAt)
+    // No rate limits in this payload means nothing was sampled, so the previous
+    // sample time stands — and stays undefined if there has never been one,
+    // rather than conjuring a metrics entry for a session that only ever
+    // reported a model name.
+    const observedAt = carriesRateLimits
+      ? (sameSample ? prev?.observedAt ?? Date.now() : Date.now())
+      : prev?.observedAt
+
     const metrics: SessionMetricsUpdate = {
       sessionId, model, contextPct, contextTokens, contextWindowSize, usagePct5h, usagePct7d, reset5hAt, reset7dAt,
+      observedAt,
     }
     // Remember the numbers so a session rebuilt after sleep/idle/restart can be
     // re-hydrated immediately (see lastMetrics / rebroadcastSessionMetrics).
-    this.mergeMetrics(sessionId, { contextPct, contextTokens, contextWindowSize, usagePct5h, usagePct7d, reset5hAt, reset7dAt })
+    // observedAt MUST be cached with them: the on-wake replay spreads this
+    // object, and a replay that arrived without one would be stamped "now" by
+    // the renderer and outrank the live reading it was meant to defer to.
+    this.mergeMetrics(sessionId, { contextPct, contextTokens, contextWindowSize, usagePct5h, usagePct7d, reset5hAt, reset7dAt, observedAt })
     this.win?.webContents.send(IPC.SESSION_METRICS_UPDATED, metrics)
 
     const transcriptPath = typeof data['transcript_path'] === 'string' ? data['transcript_path'] : null

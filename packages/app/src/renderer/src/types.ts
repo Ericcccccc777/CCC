@@ -50,6 +50,18 @@ export interface SessionNotification {
   message?:   string
 }
 
+// The account-level rate-limit picture, reconciled across every terminal.
+// 5h / 7d usage belong to the Anthropic ACCOUNT, but they only ever arrive
+// per-terminal on a statusLine, and an idle terminal keeps re-reporting a
+// stale snapshot. `observedAt` is what lets the newest report win.
+export interface AccountUsage {
+  usagePct:   number   // 0-1, five_hour
+  weeklyPct:  number   // 0-1, seven_day
+  reset5hAt:  number   // ms epoch, 0 = unknown
+  reset7dAt:  number   // ms epoch, 0 = unknown
+  observedAt: number   // ms epoch of the statusLine this came from
+}
+
 export interface Session {
   readonly id:          number
   readonly workspace:   string

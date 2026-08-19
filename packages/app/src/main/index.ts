@@ -23,7 +23,7 @@ import { harnessRead, harnessSummary, listSessions, readTranscriptById, readProj
 import type { MagiEnvId } from '../shared/magi'
 import type { PlatformAdapter } from './platform/PlatformAdapter'
 import { createPlatformAdapter } from './platform'
-import { STATUSLINE_RELAY_JS } from './platform/shared'
+import { buildStatusLineRelay } from './platform/shared'
 import { ApiProviderManager, VaultUnavailableError, type CryptoVault } from './api/ApiProviderManager'
 import { ApiUsageManager } from './api/ApiUsageManager'
 import { ApiUsageStore } from './api/ApiUsageStore'
@@ -44,6 +44,14 @@ import { shouldDeferCloseForRecovery, shouldRespawnClosedWatcher, shouldFinalize
 
 const WIN_WIDTH  = 400
 const WIN_HEIGHT = 520
+// Files under userData that outlive a single app run. The relay script is
+// shared by every session (its body is session-independent); the port file is
+// how a terminal that outlived an app restart discovers the new hook-server
+// port, since its own CCC_PORT env var was frozen at spawn time. AppWindow
+// hands the same port path to HookServer, which writes it on start.
+const RELAY_FILE_NAME = 'ccc-statusline.js'
+const PORT_FILE_NAME  = 'ccc-port'
+
 const SLEEP_RECOVERY_HOLD_MS = 10 * 60 * 1000
 const RESUME_RECOVERY_HOLD_MS = 15 * 1000
 const RESUME_RESTORE_DELAYS_MS = [1000, 3000, 7000, 12000] as const
@@ -91,7 +99,7 @@ class SessionManager {
   // One statusLine relay script per install, not per session. The relay body
   // is session-independent — a session identifies itself through the
   // CCC_SESSION_ID env var its launch script exports, not through which copy
-  // of the file it runs (see STATUSLINE_RELAY_JS) — so per-session copies
+  // of the file it runs (see buildStatusLineRelay) — so per-session copies
   // bought nothing and cost correctness: <workspace>/.claude/settings.json
   // holds exactly ONE statusLine entry, so every session in a workspace runs
   // whichever copy was injected last, and cleanup() unlinking that copy froze
@@ -99,6 +107,10 @@ class SessionManager {
   // than tmpdir so the OS reaper can't delete it out from under a live
   // session.
   private relayScript: string
+  // Path the HookServer publishes its live port to. Baked into the relay body
+  // so a terminal that outlived an app restart can find the new port; its own
+  // CCC_PORT env var is frozen at spawn time and unreachable.
+  private portFile:    string
   // Sessions currently mid-swap via restartAsApi. The bound close handler
   // for the OLD proc fires when SIGTERM cascades through it, but we don't
   // want that to delete the entry from the map (the renderer would see
@@ -131,7 +143,8 @@ class SessionManager {
     this.apiProviders = apiProviders
     this.registry     = registry
     this.tmp          = tmpdir()
-    this.relayScript  = join(app.getPath('userData'), 'ccc-statusline.js')
+    this.relayScript  = join(app.getPath('userData'), RELAY_FILE_NAME)
+    this.portFile     = join(app.getPath('userData'), PORT_FILE_NAME)
   }
 
   // Bind a close handler that no-ops if the session entry has been swapped
@@ -856,7 +869,7 @@ class SessionManager {
     // a half-written file and lose a tick. Same tmp+rename pattern as
     // ApiUsageStore.
     const tmp = `${this.relayScript}.tmp`
-    writeFileSync(tmp, STATUSLINE_RELAY_JS, 'utf8')
+    writeFileSync(tmp, buildStatusLineRelay(this.portFile), 'utf8')
     renameSync(tmp, this.relayScript)
     return this.relayScript
   }
@@ -1403,7 +1416,7 @@ class IpcHandlers {
 
 class AppWindow {
   private win:         BrowserWindow | null = null
-  private hookSrv      = new HookServer()
+  private hookSrv      = new HookServer(undefined, join(app.getPath('userData'), PORT_FILE_NAME))
   private handlers:    IpcHandlers | null = null
   private persistence  = new SessionPersistence()
   private adapter:     PlatformAdapter = createPlatformAdapter()

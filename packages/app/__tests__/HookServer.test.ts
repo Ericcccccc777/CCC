@@ -1,5 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import * as http from 'http'
+import { mkdtempSync, existsSync, readFileSync } from 'fs'
+import { tmpdir } from 'os'
+import { join } from 'path'
 
 // Mock electron's runtime surface so HookServer.attachWindow / stop can call
 // ipcMain.* without a real Electron context. HookServer's reference to
@@ -427,6 +430,60 @@ class HookServerTimeoutTests {
     // Unix-SECONDS number (verified 2026-05-09: {"resets_at": 1778313600}).
     // Earlier code only treated `resets_at` as an ISO string; numbers fell
     // through to the no-data path and the renderer never received reset
+    // The hook server binds an ephemeral port, fresh on every app start, but a
+    // terminal's CCC_PORT env var is frozen at `exec claude` time. Publishing
+    // the live port to a stable file is the only channel that reaches a
+    // terminal which outlived an app restart.
+    describe('port file publication', () => {
+      let dir: string
+      let portPath: string
+      let server: HookServer | null
+
+      beforeEach(() => {
+        dir = mkdtempSync(join(tmpdir(), 'ccc-port-'))
+        portPath = join(dir, 'ccc-port')
+        server = null
+      })
+      afterEach(() => { server?.stop() })
+
+      it('writes the listening port on start and removes it on stop', async () => {
+        server = new HookServer(80, portPath)
+        const port = await server.start()
+
+        expect(existsSync(portPath)).toBe(true)
+        expect(readFileSync(portPath, 'utf8')).toBe(String(port))
+
+        server.stop()
+        server = null
+        expect(existsSync(portPath)).toBe(false)
+      })
+
+      it('republishes the new port when a second server starts (the app-restart case)', async () => {
+        const first = new HookServer(80, portPath)
+        await first.start()
+        first.stop()
+
+        server = new HookServer(80, portPath)
+        const secondPort = await server.start()
+
+        // The file names whoever is listening NOW. Deliberately not asserting
+        // the two ports differ: the OS is free to hand back the same ephemeral
+        // port once the first server released it, and that would be correct.
+        expect(readFileSync(portPath, 'utf8')).toBe(String(secondPort))
+      })
+
+      it('writes nothing when no port-file path is configured', async () => {
+        server = new HookServer(80)
+        await server.start()
+        expect(existsSync(portPath)).toBe(false)
+      })
+
+      it('starts normally when the port file cannot be written', async () => {
+        server = new HookServer(80, join(dir, 'no', 'such', 'dir', 'ccc-port'))
+        await expect(server.start()).resolves.toBeGreaterThan(0)
+      })
+    })
+
     // timestamps. Magnitude-based discrimination handles both seconds and
     // ms encodings without a build-version sniff.
     describe('rate_limits resets_at parsing', () => {
@@ -458,6 +515,17 @@ class HookServerTimeoutTests {
           data: { rate_limits: rateLimits },
         }, fakeRes)
       }
+
+      // The renderer reconciles account-level 5h/7d newest-wins across
+      // terminals, and an idle terminal re-emits a stale snapshot forever, so
+      // freshness has to be carried explicitly.
+      it('stamps observedAt on every fresh statusLine observation', () => {
+        const before = Date.now()
+        handle({ five_hour: { used_percentage: 40 } })
+        const at = metricsSent[0]!.observedAt!
+        expect(at).toBeGreaterThanOrEqual(before)
+        expect(at).toBeLessThanOrEqual(Date.now())
+      })
 
       it('parses Unix-SECONDS number (Claude Code 2026-05 schema)', () => {
         handle({
@@ -716,6 +784,9 @@ class HookServerTimeoutTests {
         expect(server.lastKnownMetrics(1)).toEqual({
           contextPct: 0.42, contextTokens: 120, contextWindowSize: 200000,
           usagePct5h: 0.30, usagePct7d: 0.55,
+          // Cached alongside the numbers so the on-wake replay carries the
+          // original sample time instead of being stamped "now".
+          observedAt: expect.any(Number),
         })
       })
 
@@ -723,6 +794,59 @@ class HookServerTimeoutTests {
         handle(1, { context_window: { used_percentage: 42 }, rate_limits: { five_hour: { used_percentage: 30 }, seven_day: { used_percentage: 55 } } })
         handle(1, { model: { display_name: 'Opus 4.8' } })   // no context_window / rate_limits at all
         expect(server.lastKnownMetrics(1)).toMatchObject({ contextPct: 0.42, usagePct5h: 0.30, usagePct7d: 0.55 })
+      })
+
+      // observedAt orders account-level 5h/7d reports across terminals. It must
+      // mean "when the CLI sampled", not "when the POST arrived": Claude Code
+      // holds rate_limits in a per-process field with no periodic refresh, so
+      // an idle terminal re-emits the same snapshot every ~5s. Stamping arrival
+      // would make each stale re-emit outrank every live reading.
+      describe('observedAt is sample time, not arrival time', () => {
+        afterEach(() => { vi.restoreAllMocks() })
+
+        const at = (ms: number): void => { vi.spyOn(Date, 'now').mockReturnValue(ms) }
+        const limits = (fiveHour: number): object => ({ rate_limits: { five_hour: { used_percentage: fiveHour } } })
+
+        it('does not advance when a terminal re-emits an unchanged snapshot', () => {
+          at(1_000); handle(1, limits(30))
+          at(9_000); handle(1, limits(30))   // idle terminal, same numbers, later POST
+          expect(metricsSent[1]!.observedAt).toBe(1_000)
+        })
+
+        it('advances when the reported numbers actually change', () => {
+          at(1_000); handle(1, limits(30))
+          at(9_000); handle(1, limits(31))
+          expect(metricsSent[1]!.observedAt).toBe(9_000)
+        })
+
+        it('advances when only the reset window moves', () => {
+          at(1_000); handle(1, { rate_limits: { five_hour: { used_percentage: 30, resets_at: 1000 } } })
+          at(9_000); handle(1, { rate_limits: { five_hour: { used_percentage: 30, resets_at: 2000 } } })
+          expect(metricsSent[1]!.observedAt).toBe(9_000)
+        })
+
+        it('is tracked per session, so one terminal’s sample does not refresh another’s', () => {
+          at(1_000); handle(1, limits(30))
+          at(9_000); handle(2, limits(80))
+          at(9_500); handle(1, limits(30))   // terminal 1 re-emits its old snapshot
+          expect(metricsSent[2]!.observedAt).toBe(1_000)
+        })
+
+        it('is not advanced by context-only churn while a session works', () => {
+          at(1_000); handle(1, limits(30))
+          at(9_000); handle(1, { context_window: { used_percentage: 55 }, ...limits(30) })
+          expect(metricsSent[1]!.observedAt).toBe(1_000)
+        })
+
+        // The bug the first cut of this batch shipped: the cache write omitted
+        // observedAt, so every replay reached the renderer without one, got
+        // stamped "now", and outranked the live reading it was meant to defer to.
+        it('survives into the on-wake replay unchanged', () => {
+          at(1_000); handle(1, limits(30))
+          metricsSent.length = 0
+          at(9_000); server.rebroadcastSessionMetrics()
+          expect(metricsSent[0]!.observedAt).toBe(1_000)
+        })
       })
 
       it('rebroadcastSessionMetrics re-emits cached model + numbers together (on-wake recovery)', () => {
@@ -734,7 +858,8 @@ class HookServerTimeoutTests {
         metricsSent.length = 0
         server.rebroadcastSessionMetrics()
         expect(metricsSent).toEqual([
-          { sessionId: 1, replay: true, model: 'Opus 4.8', contextPct: 0.42, usagePct5h: 0.30, usagePct7d: 0.55 },
+          { sessionId: 1, replay: true, model: 'Opus 4.8', contextPct: 0.42, usagePct5h: 0.30, usagePct7d: 0.55,
+            observedAt: expect.any(Number) },
         ])
       })
 
@@ -742,14 +867,19 @@ class HookServerTimeoutTests {
         handle(9, { context_window: { used_percentage: 12 } })
         metricsSent.length = 0
         server.rebroadcastSessionMetrics()
+        // No rate limits were ever reported for this session, so there is no
+        // sample time to carry — observedAt exists only to order account-level
+        // 5h/7d reports.
         expect(metricsSent).toEqual([{ sessionId: 9, replay: true, contextPct: 0.12 }])
       })
 
       it('seedMetrics primes the cache (used when restoring a persisted session cold)', () => {
-        server.seedMetrics(7, { contextPct: 0.5, usagePct5h: 0.25, usagePct7d: 0.6 })
-        expect(server.lastKnownMetrics(7)).toEqual({ contextPct: 0.5, usagePct5h: 0.25, usagePct7d: 0.6 })
+        server.seedMetrics(7, { contextPct: 0.5, usagePct5h: 0.25, usagePct7d: 0.6, observedAt: 1_700_000_000_000 })
+        expect(server.lastKnownMetrics(7)).toEqual({ contextPct: 0.5, usagePct5h: 0.25, usagePct7d: 0.6, observedAt: 1_700_000_000_000 })
         server.rebroadcastSessionMetrics()
-        expect(metricsSent).toContainEqual({ sessionId: 7, replay: true, contextPct: 0.5, usagePct5h: 0.25, usagePct7d: 0.6 })
+        // The seeded (possibly days-old) sample time survives the replay, so a
+        // cold restore can't outrank a live reading.
+        expect(metricsSent).toContainEqual({ sessionId: 7, replay: true, contextPct: 0.5, usagePct5h: 0.25, usagePct7d: 0.6, observedAt: 1_700_000_000_000 })
       })
 
       it('stopTranscript forgets the remembered numbers even with no transcript watcher', () => {

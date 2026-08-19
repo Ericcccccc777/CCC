@@ -6,7 +6,7 @@ import { CodexSwitchPopup } from './components/CodexSwitchPopup'
 import { NewSessionEnginePopup } from './components/NewSessionEnginePopup'
 import { QuitConfirmPopup } from './components/QuitConfirmPopup'
 import { ContextAlertPopup } from './components/ContextAlertPopup'
-import type { AppState, OverlayMode, Session, ActionType, SessionNotification, SessionStateUpdate, SessionMetricsUpdate, SessionRestored, CodexReasoningEffort, ClaudeReasoningEffort } from './types'
+import type { AccountUsage, AppState, OverlayMode, Session, ActionType, SessionNotification, SessionStateUpdate, SessionMetricsUpdate, SessionRestored, CodexReasoningEffort, ClaudeReasoningEffort } from './types'
 
 // --- Overlay layout constants ----------------------------------------------
 // All overlay-mode bounds are derived from these. Single source so the snap
@@ -287,6 +287,16 @@ export function App(): JSX.Element {
   // usage (one stream per session).
   const [apiBalances, setApiBalances] = useState<Record<ApiProviderId, ApiBalanceSnapshot>>({} as Record<ApiProviderId, ApiBalanceSnapshot>)
   const [apiUsage,    setApiUsage]    = useState<Record<number, ApiUsageSnapshot>>({})
+  // 5h and 7d usage are ACCOUNT-level: one number per Anthropic account, not
+  // per terminal. They used to be stored per session and painted from whichever
+  // session happened to be active, so N terminals kept N independent copies and
+  // the pill showed whichever one it landed on — different terminals disagreed,
+  // and a terminal whose statusLine had died showed its last value forever.
+  // Worse, the CLI's own rate_limits are a per-process snapshot with no
+  // periodic refresh, so an idle terminal re-reports a stale number
+  // indefinitely. One store, newest observation wins, so a single active
+  // terminal keeps the readout honest for all of them.
+  const [accountUsage, setAccountUsage] = useState<AccountUsage | null>(null)
   const wrapperRef                            = useRef<HTMLDivElement>(null)
   // Per-session last-fired context-alert band (0 none / 1 ≥85% / 2 ≥95%) for
   // dedup, and a live mirror of activeId so the metrics listener (deps: []) can
@@ -294,6 +304,10 @@ export function App(): JSX.Element {
   const contextAlertLevelRef                  = useRef<Map<number, number>>(new Map())
   const activeIdRef                           = useRef<number | null>(null)
   activeIdRef.current = activeId
+  // Live mirror of `sessions` so the metrics listener (deps: []) can look up
+  // the reporting session's mode without re-subscribing.
+  const sessionsRef                           = useRef<Session[]>([])
+  sessionsRef.current = sessions
   const pointerPositionRef                    = useRef<{ x: number; y: number } | null>(null)
 
   // mousemove fires at 60–120 Hz inside the island; without a guard, every
@@ -1078,6 +1092,46 @@ export function App(): JSX.Element {
           if (sid === activeIdRef.current) setContextAlert({ sessionId: sid, pct })
         }
       }
+      // Account-level rate limits. Only Anthropic sessions carry them (an
+      // api-mode session talks to a third-party endpoint and emits no
+      // rate_limits at all), and the freshest observation from ANY terminal
+      // is the truth for every terminal.
+      if (update.usagePct5h !== undefined || update.usagePct7d !== undefined) {
+        const reporter = sessionsRef.current.find(s => s.id === update.sessionId)
+        if (!reporter || reporter.mode === 'anthropic') {
+          const at = update.observedAt ?? Date.now()
+          setAccountUsage(prev => {
+            // Two independent staleness tests, because neither alone is enough.
+            //
+            // 1. resets_at only ever moves FORWARD for an account. A report
+            //    naming an earlier 5h window was sampled before the last
+            //    rollover, so it is stale no matter what its timestamp says —
+            //    this is what stops a pre-sleep snapshot from resurrecting
+            //    after the window has turned over. A report naming a LATER
+            //    window is newer by definition and wins outright.
+            // 2. Within the same window, the newest sample wins. observedAt is
+            //    sample time, not arrival time (see HookServer), so a replay
+            //    and an idle terminal's re-emit both carry their original time
+            //    and cannot outrank a fresher live reading.
+            if (prev) {
+              const window = update.reset5hAt
+              if (window !== undefined && window > 0 && prev.reset5hAt > 0) {
+                if (window < prev.reset5hAt) return prev
+                if (window === prev.reset5hAt && at < prev.observedAt) return prev
+              } else if (at < prev.observedAt) return prev
+            }
+            // Merge field-by-field: a payload carrying only five_hour must not
+            // wipe a known seven_day.
+            return {
+              usagePct:   update.usagePct5h ?? prev?.usagePct  ?? 0,
+              weeklyPct:  update.usagePct7d ?? prev?.weeklyPct ?? 0,
+              reset5hAt:  update.reset5hAt  ?? prev?.reset5hAt ?? 0,
+              reset7dAt:  update.reset7dAt  ?? prev?.reset7dAt ?? 0,
+              observedAt: at,
+            }
+          })
+        }
+      }
       setSessions(prev => prev.map(s => {
         if (s.id !== update.sessionId) return s
         return {
@@ -1104,10 +1158,14 @@ export function App(): JSX.Element {
   const contextPct        = activeSession?.contextPct ?? 0
   const contextTokens     = activeSession?.contextTokens
   const contextWindowSize = activeSession?.contextWindowSize
-  const usagePct      = activeSession?.usagePct   ?? 0
-  const weeklyPct     = activeSession?.weeklyPct  ?? 0
-  const reset5hAt     = activeSession?.reset5hAt  ?? 0
-  const reset7dAt     = activeSession?.reset7dAt  ?? 0
+  // 5h / weekly come from the account store, not the active session's private
+  // copy — see accountUsage. Non-Anthropic sessions have no Anthropic quota, so
+  // they keep their own (empty) values rather than borrowing the account's.
+  const showAccountUsage = activeSession?.mode === 'anthropic' && accountUsage !== null
+  const usagePct      = (showAccountUsage ? accountUsage.usagePct  : activeSession?.usagePct)  ?? 0
+  const weeklyPct     = (showAccountUsage ? accountUsage.weeklyPct : activeSession?.weeklyPct) ?? 0
+  const reset5hAt     = (showAccountUsage ? accountUsage.reset5hAt : activeSession?.reset5hAt) ?? 0
+  const reset7dAt     = (showAccountUsage ? accountUsage.reset7dAt : activeSession?.reset7dAt) ?? 0
   const notification  = activeSession?.notification ?? backgroundNotification
   // Active session's API usage snapshot (mode === 'api' only). Used by
   // Island to swap the second ring out for a session-cost display.
