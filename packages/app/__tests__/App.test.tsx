@@ -114,6 +114,93 @@ class AppTests {
       // following a click on the pill can be delivered to the window under
       // the overlay (passthrough flip / focus change), so the renderer never
       // sees it and the long-press timer engages drag mode on a plain click.
+      // A spuriously engaged drag is not cosmetic: targetBounds grows the
+      // window to the whole work area and click-through goes off, so an
+      // invisible full-screen surface eats every click on the machine until
+      // something ends the drag. These three invariants make that bounded.
+      describe('drag cannot engage or persist by accident', () => {
+        const pill = (): Element => document.querySelector('.island')!
+        const dragging = (): Element | null => document.querySelector('.island-wrapper--dragging')
+        const wrapper = (): Element | null => document.querySelector('.island-wrapper')
+
+        it('does not engage when the long-press timer fires far later than scheduled', async () => {
+          vi.useFakeTimers()
+          try {
+            render(<App />)
+            await vi.advanceTimersByTimeAsync(0)
+            fireEvent.mouseDown(pill(), { button: 0, buttons: 1, clientX: 50, clientY: 10 })
+            // The renderer stalled / the machine slept: wall clock jumps well
+            // past the deadline before the timer callback actually runs.
+            vi.setSystemTime(Date.now() + 5_000)
+            await vi.advanceTimersByTimeAsync(500)
+            expect(dragging()).toBeNull()
+          } finally { vi.useRealTimers() }
+        })
+
+        it('still engages on a normal long press', async () => {
+          vi.useFakeTimers()
+          try {
+            render(<App />)
+            await vi.advanceTimersByTimeAsync(0)
+            fireEvent.mouseDown(pill(), { button: 0, buttons: 1, clientX: 50, clientY: 10 })
+            await vi.advanceTimersByTimeAsync(450)
+            expect(dragging()).not.toBeNull()
+          } finally { vi.useRealTimers() }
+        })
+
+        // The self-heal used to call settleDragAt, which COMMITS: the pill
+        // lands wherever the cursor drifted to and the overlay mode changes
+        // with it. We never saw the release, so there is nothing to commit.
+        it('reverts rather than relocating when the mouseup was lost', async () => {
+          vi.useFakeTimers()
+          try {
+            render(<App />)
+            await vi.advanceTimersByTimeAsync(0)
+            fireEvent.mouseDown(pill(), { button: 0, buttons: 1, clientX: 700, clientY: 10 })
+            await vi.advanceTimersByTimeAsync(450)
+            expect(dragging()).not.toBeNull()
+
+            // Button already up, cursor now at the far-left snap zone.
+            fireEvent.mouseMove(document, { buttons: 0, clientX: 2, clientY: 10 })
+            await vi.advanceTimersByTimeAsync(0)
+
+            expect(dragging()).toBeNull()
+            // Back to the mode it started in — NOT corner-shrunk, which is what
+            // committing at x=2 would have selected.
+            expect(wrapper()?.className ?? '').not.toContain('island-wrapper--corner-shrunk')
+          } finally { vi.useRealTimers() }
+        })
+
+        it('abandons a drag that receives no pointer input at all', async () => {
+          vi.useFakeTimers()
+          try {
+            render(<App />)
+            await vi.advanceTimersByTimeAsync(0)
+            fireEvent.mouseDown(pill(), { button: 0, buttons: 1, clientX: 50, clientY: 10 })
+            await vi.advanceTimersByTimeAsync(450)
+            expect(dragging()).not.toBeNull()
+
+            await vi.advanceTimersByTimeAsync(6_000)   // watchdog is 5s
+            expect(dragging()).toBeNull()
+          } finally { vi.useRealTimers() }
+        })
+
+        it('keeps a drag alive while the pointer is actually moving', async () => {
+          vi.useFakeTimers()
+          try {
+            render(<App />)
+            await vi.advanceTimersByTimeAsync(0)
+            fireEvent.mouseDown(pill(), { button: 0, buttons: 1, clientX: 50, clientY: 10 })
+            await vi.advanceTimersByTimeAsync(450)
+            for (let i = 0; i < 4; i++) {
+              await vi.advanceTimersByTimeAsync(3_000)
+              fireEvent.mouseMove(document, { buttons: 1, clientX: 60 + i, clientY: 10 })
+            }
+            expect(dragging()).not.toBeNull()
+          } finally { vi.useRealTimers() }
+        })
+      })
+
       describe('long-press lost-mouseup self-heal', () => {
         it('does not engage drag when a move reports the button released before the timer fires', async () => {
           render(<App />)

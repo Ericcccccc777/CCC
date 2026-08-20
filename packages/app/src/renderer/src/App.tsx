@@ -31,6 +31,11 @@ const CORNER_INSET     = 16
 const CORNER_NOTIF_W   = 280
 const LONG_PRESS_MS    = 400
 const DRAG_THRESHOLD   = 6  // px movement before mousedown becomes a drag
+// An engaged drag that sees no pointer input for this long is abandoned. Real
+// drags produce a move every few ms; only a drag nobody is performing goes
+// quiet, and while it is engaged the overlay holds the entire work area with
+// click-through disabled.
+const DRAG_WATCHDOG_MS = 5_000
 
 type WorkArea = { x: number; y: number; width: number; height: number }
 type Bounds   = { x: number; y: number; width: number; height: number }
@@ -702,6 +707,14 @@ export function App(): JSX.Element {
   // overlayMode.
   const longPressTimerRef    = useRef<number | null>(null)
   const longPressStartRef    = useRef<{ x: number; y: number } | null>(null)
+  // Wall-clock of the mousedown that armed the long-press timer, and the
+  // watchdog that bounds an engaged drag. Both exist because a drag that
+  // engages spuriously is not a cosmetic glitch: targetBounds grows the window
+  // to the whole work area and overlayCapturesAlways turns off click-through,
+  // so a stuck drag means an invisible full-screen window eating every click
+  // on the machine until the user happens to move the mouse.
+  const pressStartedAtRef    = useRef(0)
+  const dragWatchdogRef      = useRef<number | null>(null)
   const dragStateRef         = useRef<DragState | null>(null)
   const overlayModeRef       = useRef<OverlayMode>('default')
   const workAreaRef          = useRef<WorkArea | null>(null)
@@ -722,6 +735,33 @@ export function App(): JSX.Element {
     }
     longPressStartRef.current = null
   }, [])
+
+  const clearDragWatchdog = useCallback((): void => {
+    if (dragWatchdogRef.current !== null) {
+      window.clearTimeout(dragWatchdogRef.current)
+      dragWatchdogRef.current = null
+    }
+  }, [])
+
+  const cancelDrag = useCallback((): void => {
+    const cur = dragStateRef.current
+    if (!cur) return
+    clearDragWatchdog()
+    setDragState(null)
+    setOverlayMode(cur.fromMode)
+  }, [clearDragWatchdog])
+
+  // An engaged drag with no pointer input at all for this long was not a drag.
+  // Without this the pill can sit in drag mode indefinitely — window grown to
+  // the full work area with click-through off — because the only things that
+  // end a drag are a move or an up, and a lost mouseup produces neither.
+  const armDragWatchdog = useCallback((): void => {
+    clearDragWatchdog()
+    dragWatchdogRef.current = window.setTimeout(() => {
+      dragWatchdogRef.current = null
+      cancelDrag()
+    }, DRAG_WATCHDOG_MS)
+  }, [cancelDrag, clearDragWatchdog])
 
   const handlePillPointerDown = useCallback((e: ReactMouseEvent): void => {
     // Drag is disabled while expanded — user said "展开状态无法移动".
@@ -748,6 +788,7 @@ export function App(): JSX.Element {
     const offsetX = pillRect ? startClientX - pillRect.left : 0
     const pillWidth = pillRect ? pillRect.width : PILL_WIDTH
     primaryPressActiveRef.current = true
+    pressStartedAtRef.current = Date.now()
     longPressStartRef.current = { x: startClientX, y: startClientY }
     longPressTimerRef.current = window.setTimeout(() => {
       // Long-press fired — engage drag mode.
@@ -755,6 +796,13 @@ export function App(): JSX.Element {
       // Belt-and-braces: if the press has been released through any path
       // that didn't clear this timer (lost mouseup, blur), never engage.
       if (!primaryPressActiveRef.current) return
+      // A timer that fires far later than it was scheduled for did not measure
+      // a long press — the renderer was stalled, the machine slept, or the OS
+      // coalesced it. Whatever the mouse did during that gap, we did not see
+      // it, so engaging drag here would turn an ordinary click into one. The
+      // user reported exactly that after leaving the pill untouched.
+      const pressHeldFor = Date.now() - pressStartedAtRef.current
+      if (pressHeldFor > LONG_PRESS_MS * 2) return
       const wa = workAreaRef.current
       if (!wa) return
       // Convert from old-window-local to screen coords using the window
@@ -767,9 +815,16 @@ export function App(): JSX.Element {
         pillWidth,
         hoverZone: classifyHoverZone(screenX, wa),
       })
+      armDragWatchdog()
     }, LONG_PRESS_MS)
-  }, [expanded, showModelPicker])
+  }, [expanded, showModelPicker, armDragWatchdog])
 
+  // Abandon an engaged drag without moving anything: the pill returns to the
+  // mode it started in. Used whenever the drag turns out not to have been a
+  // real one — a mouseup we never saw, or a watchdog expiry. Settling instead
+  // (which is what the self-heal used to do) COMMITS the accident: the pill
+  // lands wherever the cursor happens to be and the overlay mode changes with
+  // it, which is what "I clicked and it jumped somewhere" looks like.
   // Settle an engaged drag at the given window-local point. Shared by the
   // normal mouseup path and the lost-mouseup self-heal in onMove below.
   const settleDragAt = useCallback((clientX: number): void => {
@@ -798,26 +853,28 @@ export function App(): JSX.Element {
     // immediately toggle expand after a drag.
     justDraggedRef.current = true
     window.setTimeout(() => { justDraggedRef.current = false }, 150)
+    clearDragWatchdog()
     setDragState(null)
     setOverlayMode(nextMode)
     // Entering a new mode resets peek — pill starts collapsed and any
     // hover/notif logic re-opens it from scratch.
     setOverlayPeek(false)
-  }, [])
+  }, [clearDragWatchdog])
 
   // Document-level move/up: track pointer for long-press cancellation +
   // drag tracking. Always mounted so the listeners are stable.
   useEffect(() => {
     const onMove = (e: MouseEvent): void => {
-      // Self-heal a lost mouseup: if the OS says the primary button is no
-      // longer down while a press or drag is still in flight, the mouseup
-      // was delivered elsewhere (focus change / passthrough flip — seen on
-      // Windows after idle). Treat this move as the missed mouseup so a
-      // plain click can never strand the pill in drag mode.
+      // Self-heal a lost mouseup: the OS says the primary button is no longer
+      // down while a press or drag is still in flight, so the mouseup was
+      // delivered elsewhere. CANCEL rather than settle — we never saw the
+      // release, so we have no idea where the user meant to drop the pill, and
+      // the cursor is wherever it drifted to since. Settling here relocated the
+      // pill and flipped the overlay mode off a click the user never made.
       if ((e.buttons & 1) === 0 && (primaryPressActiveRef.current || dragStateRef.current)) {
         primaryPressActiveRef.current = false
         cancelLongPress()
-        settleDragAt(e.clientX)
+        cancelDrag()
         return
       }
       // Cancel pending long-press if the user moved before the timer fired
@@ -834,6 +891,7 @@ export function App(): JSX.Element {
       // workArea.x and we derive screen X from e.clientX consistently.
       const cur = dragStateRef.current
       if (cur) {
+        armDragWatchdog()
         const wa = workAreaRef.current
         const screenX = window.screenX + e.clientX
         const zone = wa ? classifyHoverZone(screenX, wa) : 'default'
@@ -845,6 +903,7 @@ export function App(): JSX.Element {
       // clears the press flag exactly when the primary button comes up.
       if ((e.buttons & 1) === 0) primaryPressActiveRef.current = false
       cancelLongPress()
+      clearDragWatchdog()
       settleDragAt(e.clientX)
     }
     // Focus loss / occlusion mid-press means the mouseup will be delivered
@@ -852,6 +911,10 @@ export function App(): JSX.Element {
     const onFocusLost = (): void => {
       primaryPressActiveRef.current = false
       cancelLongPress()
+      // The mouseup is going to be delivered to whoever has focus now, so an
+      // engaged drag would otherwise sit there holding the whole screen.
+      clearDragWatchdog()
+      cancelDrag()
     }
     const onVisibilityChange = (): void => {
       if (document.visibilityState !== 'visible') onFocusLost()
@@ -866,7 +929,7 @@ export function App(): JSX.Element {
       window.removeEventListener('blur', onFocusLost)
       document.removeEventListener('visibilitychange', onVisibilityChange)
     }
-  }, [cancelLongPress, settleDragAt])
+  }, [cancelLongPress, settleDragAt, cancelDrag, armDragWatchdog, clearDragWatchdog])
 
   // Auto-peek for top-hidden mode:
   //   - When a notification fires: peek out (pill + popup visible).
