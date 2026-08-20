@@ -195,7 +195,12 @@ class SessionManager {
     return entry.mode === 'codex' ? 'codex' : 'claude'
   }
 
-  private recoverSessionProcess(sessionId: number, entry: SessionEntry, userInitiatedClose: boolean): boolean {
+  private recoverSessionProcess(
+    sessionId: number,
+    entry: SessionEntry,
+    userInitiatedClose: boolean,
+    opts: { readonly deferFlush?: boolean } = {},
+  ): boolean {
     const currentPid = this.readInnerPid(entry) ?? undefined
     const recovered = this.adapter.recoverSessionProcess({
       sessionId,
@@ -212,6 +217,26 @@ class SessionManager {
       return false
     }
 
+    // The inner CLI is alive — but is THIS session's watcher still watching it?
+    // Nothing here used to ask. listKnownSessions() calls this for every session
+    // on every window-focus event, and for a healthy session the gate above
+    // passes (pidFile present, inner pid alive, not a user close), so each focus
+    // spawned a fresh `sh` watcher and abandoned the previous one. The orphan
+    // polls the same inner pid, so nothing ever stops it, and its close handler
+    // is inert (bindClose's `cur.proc !== owner` guard). At ~2 OS processes and
+    // one /bin/sleep fork per second each, that walks the per-uid process limit
+    // until every app on the machine fails to fork.
+    const watcherAlive = entry.proc.exitCode === null
+      && entry.proc.signalCode === null
+      && !entry.proc.killed
+    if (watcherAlive) {
+      entry.innerPid = recovered.pid
+      if (recovered.terminalTty) entry.terminalTty = recovered.terminalTty
+      // `true` means "still attached, don't finalize" to both callers
+      // (bindClose and the unexpected-close retry).
+      return true
+    }
+
     try { writeFileSync(entry.pidFile, String(recovered.pid), 'utf8') } catch { /* respawnMonitor still receives the PID directly */ }
     const result = this.adapter.respawnMonitor({ sessionId, innerPid: recovered.pid, pidFile: entry.pidFile })
     const rebound: SessionEntry = {
@@ -224,7 +249,10 @@ class SessionManager {
     this.sessions.set(sessionId, rebound)
     this.bindClose(rebound, sessionId)
     this.unexpectedCloseRecovery.delete(sessionId)
-    this.flushRegistry()
+    // Callers sweeping every session (listKnownSessions) flush once at the end:
+    // flushRegistry → persist re-probes ALL sessions, so flushing per session
+    // made the sweep O(N²) in blocking subprocess probes on the main thread.
+    if (!opts.deferFlush) this.flushRegistry()
     return true
   }
 
@@ -269,7 +297,7 @@ class SessionManager {
   }
 
   private flushRegistry(opts: { readonly clearWhenEmptyDuringRecovery?: boolean } = {}): void {
-    const sessions = this.persist()
+    const sessions = this.persist()   // no probe: routine flush, entries are already fresh
     if (sessions.length === 0) {
       if (this.isRecoveryHoldActive() && !opts.clearWhenEmptyDuringRecovery) return
       this.registry.clear()
@@ -446,19 +474,27 @@ class SessionManager {
   }
 
   // Collect current session data for persistence before system sleep
-  persist(): PersistedSession[] {
+  // `probe` re-resolves every session's inner pid + tty through the adapter,
+  // which shells out. That is worth it before a sleep snapshot, where the
+  // registry is the only record that survives; it is NOT worth it on a routine
+  // registry flush, which happens on every session close, launch and focus
+  // sweep and already runs right after the caller refreshed the entry. Probing
+  // there made every flush O(N) subprocess spawns on the main thread.
+  persist(opts: { readonly probe?: boolean } = {}): PersistedSession[] {
     const result: PersistedSession[] = []
     for (const [id, entry] of this.sessions) {
-      const recovered = this.adapter.recoverSessionProcess({
-        sessionId:   id,
-        pidFile:     entry.pidFile,
-        engine:      this.sessionEngine(entry),
-        currentPid:  this.readInnerPid(entry) ?? undefined,
-        terminalTty: this.readTerminalTty(entry),
-      })
-      if (recovered) {
-        entry.innerPid = recovered.pid
-        if (recovered.terminalTty) entry.terminalTty = recovered.terminalTty
+      if (opts.probe) {
+        const recovered = this.adapter.recoverSessionProcess({
+          sessionId:   id,
+          pidFile:     entry.pidFile,
+          engine:      this.sessionEngine(entry),
+          currentPid:  this.readInnerPid(entry) ?? undefined,
+          terminalTty: this.readTerminalTty(entry),
+        })
+        if (recovered) {
+          entry.innerPid = recovered.pid
+          if (recovered.terminalTty) entry.terminalTty = recovered.terminalTty
+        }
       }
       const innerPid = entry.innerPid
       if (!innerPid) continue
@@ -579,12 +615,16 @@ class SessionManager {
     this.flushRegistry()
   }
 
+  // Called on every window-focus / visibility transition from the renderer, so
+  // it has to be cheap: one flush at the end instead of one per session.
   listKnownSessions(): readonly SessionRestored[] {
+    let changed = false
     for (const [sessionId, entry] of this.sessions) {
       if (entry.origin === 'ccc-managed' && entry.pidFile.length > 0) {
-        this.recoverSessionProcess(sessionId, entry, false)
+        if (this.recoverSessionProcess(sessionId, entry, false, { deferFlush: true })) changed = true
       }
     }
+    if (changed) this.flushRegistry()
     return [...this.sessions.entries()].map(([sessionId, entry]) => this.toRestoredPayload(sessionId, entry))
   }
 
@@ -925,8 +965,10 @@ class IpcHandlers {
     this.codexWatcher = new CodexSessionWatcher()
   }
 
+  // Pre-sleep snapshot: the registry is the only thing that survives, so pay
+  // for a fresh probe here even though routine flushes skip it.
   persistSessions(): PersistedSession[] {
-    return this.manager?.persist() ?? []
+    return this.manager?.persist({ probe: true }) ?? []
   }
 
   tryRestore(sessions: PersistedSession[], win: BrowserWindow): void {

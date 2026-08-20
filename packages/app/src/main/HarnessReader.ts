@@ -93,38 +93,78 @@ function sessionsDir(workspace: string): string {
   return join(homedir(), '.claude', 'projects', encodeWorkspace(workspace))
 }
 
+// Iterate a .jsonl file's rows without materialising every line at once.
+// `readFileSync().split('\n')` holds the whole file as ONE string AND as N
+// line strings simultaneously; these transcripts reach tens of MB and this runs
+// on the Electron main thread, where the extra copy is a visible stall.
+function forEachJsonlRow(path: string, fn: (obj: Record<string, unknown>) => void): boolean {
+  let raw: string
+  try { raw = readFileSync(path, 'utf8') } catch { return false }
+  let start = 0
+  while (start < raw.length) {
+    let end = raw.indexOf('\n', start)
+    if (end === -1) end = raw.length
+    const line = raw.slice(start, end).trim()
+    start = end + 1
+    if (!line) continue
+    let obj: Record<string, unknown>
+    try { obj = JSON.parse(line) as Record<string, unknown> } catch { continue }
+    fn(obj)
+  }
+  return true
+}
+
+// The user-visible shape of one transcript row, or null for rows the UI never
+// shows (tool_result echoes, meta rows). Shared by every reader below so they
+// cannot drift apart on what counts as a "message".
+function displayRow(obj: Record<string, unknown>): { role: 'user' | 'assistant'; text: string; tools: string[] } | null {
+  const inner = (obj['message'] && typeof obj['message'] === 'object'
+    ? obj['message'] as Record<string, unknown>
+    : obj)
+  const role        = inner['role']
+  const isUser      = role === 'user'      || obj['type'] === 'human' || obj['type'] === 'user'
+  const isAssistant = role === 'assistant' || obj['type'] === 'assistant'
+  if (!isUser && !isAssistant) return null
+  const content = inner['content'] ?? obj['content']
+  const text    = extractText(content).trim()
+  const tools   = extractTools(content)
+  if (!text && tools.length === 0) return null
+  return { role: isUser ? 'user' : 'assistant', text, tools }
+}
+
 // Parse a single Claude Code transcript .jsonl into ordered messages. Returns []
 // on any failure. `cap` keeps the last N messages so a long session can't bloat
 // the IPC payload.
 function parseTranscriptFile(path: string, cap: number): TranscriptMessage[] {
-  let lines: string[]
-  try { lines = readFileSync(path, 'utf8').split('\n') } catch { return [] }
   const msgs: TranscriptMessage[] = []
-  for (const line of lines) {
-    const t = line.trim()
-    if (!t) continue
-    let obj: Record<string, unknown>
-    try { obj = JSON.parse(t) as Record<string, unknown> } catch { continue }
-    const inner = (obj['message'] && typeof obj['message'] === 'object'
-      ? obj['message'] as Record<string, unknown>
-      : obj)
-    const role        = inner['role']
-    const isUser      = role === 'user'      || obj['type'] === 'human' || obj['type'] === 'user'
-    const isAssistant = role === 'assistant' || obj['type'] === 'assistant'
-    if (!isUser && !isAssistant) continue
-    const content = inner['content'] ?? obj['content']
-    const text    = extractText(content).trim()
-    const tools   = extractTools(content)
-    // tool_result rows arrive as user-role messages with no text — skip them.
-    if (!text && tools.length === 0) continue
+  forEachJsonlRow(path, obj => {
+    const row = displayRow(obj)
+    if (!row) return
     msgs.push({
-      role:      isUser ? 'user' : 'assistant',
-      text,
-      tools,
+      ...row,
       timestamp: typeof obj['timestamp'] === 'string' ? obj['timestamp'] : undefined,
     })
-  }
+  })
   return cap > 0 && msgs.length > cap ? msgs.slice(-cap) : msgs
+}
+
+// Title + message count for the session list, WITHOUT building the messages.
+// listSessions used to call parseTranscriptFile with cap = 0 — which the cap
+// check reads as "unlimited" — so listing 40 sessions materialised every
+// message of every transcript, complete with full text, to produce one title
+// and one number per file.
+function summarizeTranscriptFile(path: string): { title: string; messageCount: number } {
+  let messageCount = 0
+  let title: string | null = null
+  forEachJsonlRow(path, obj => {
+    const row = displayRow(obj)
+    if (!row) return
+    messageCount += 1
+    if (title === null && row.role === 'user' && row.text) {
+      title = row.text.replace(/\s+/g, ' ').slice(0, 80)
+    }
+  })
+  return { title: title ?? '—', messageCount }
 }
 
 // List the workspace's Claude Code sessions (what `/resume` would show), newest
@@ -147,10 +187,8 @@ export function listSessions(workspace: string): SessionListItem[] {
   }
   files.sort((a, b) => b.mtimeMs - a.mtimeMs)
   return files.slice(0, 40).map(f => {
-    const msgs      = parseTranscriptFile(f.path, 0)
-    const firstUser = msgs.find(m => m.role === 'user' && m.text)
-    const title     = firstUser ? firstUser.text.replace(/\s+/g, ' ').slice(0, 80) : '—'
-    return { id: f.id, title, messageCount: msgs.length, mtimeMs: f.mtimeMs }
+    const { title, messageCount } = summarizeTranscriptFile(f.path)
+    return { id: f.id, title, messageCount, mtimeMs: f.mtimeMs }
   })
 }
 
@@ -227,18 +265,39 @@ interface SessionScan {
 
 // One raw pass over a session .jsonl: sum token usage + count display messages,
 // tool_use blocks (by name), and per-day message activity.
+// Transcripts are append-mostly and the stats pass re-reads up to 200 of them
+// on every dashboard open. Key the cache on identity + mtime + size so an
+// appended file re-scans and an unchanged one does not. Bounded so a user with
+// many workspaces cannot grow it without limit.
+const SCAN_CACHE_MAX = 400
+const scanCache = new Map<string, { readonly key: string; readonly scan: SessionScan }>()
+
 function scanSessionFile(path: string): SessionScan {
+  let cacheKey: string | null = null
+  try {
+    const st = statSync(path)
+    cacheKey = `${st.mtimeMs}:${st.size}`
+    const hit = scanCache.get(path)
+    if (hit && hit.key === cacheKey) return hit.scan
+  } catch { /* unstattable — just scan it */ }
+
   const acc: SessionScan = {
     messages: 0, toolCalls: 0, input: 0, output: 0, cacheRead: 0, cacheCreation: 0,
     toolCounts: {}, dayCounts: {},
   }
-  let lines: string[]
-  try { lines = readFileSync(path, 'utf8').split('\n') } catch { return acc }
-  for (const line of lines) {
-    const t = line.trim()
-    if (!t) continue
-    let obj: Record<string, unknown>
-    try { obj = JSON.parse(t) as Record<string, unknown> } catch { continue }
+  const read = scanSessionRows(path, acc)
+  if (read && cacheKey !== null) {
+    if (scanCache.size >= SCAN_CACHE_MAX) {
+      const oldest = scanCache.keys().next().value
+      if (oldest !== undefined) scanCache.delete(oldest)
+    }
+    scanCache.set(path, { key: cacheKey, scan: acc })
+  }
+  return acc
+}
+
+function scanSessionRows(path: string, acc: SessionScan): boolean {
+  return forEachJsonlRow(path, obj => {
 
     // Tokens — assistant lines carry message.usage (summed per turn = billed).
     const usage = extractUsageDelta(obj)
@@ -249,28 +308,18 @@ function scanSessionFile(path: string): SessionScan {
       if (usage.cacheCreationTokens && usage.cacheCreationTokens > 0) acc.cacheCreation += usage.cacheCreationTokens
     }
 
-    // Display messages + tool calls (same filter as parseTranscriptFile).
-    const inner = (obj['message'] && typeof obj['message'] === 'object'
-      ? obj['message'] as Record<string, unknown>
-      : obj)
-    const role        = inner['role']
-    const isUser      = role === 'user'      || obj['type'] === 'human' || obj['type'] === 'user'
-    const isAssistant = role === 'assistant' || obj['type'] === 'assistant'
-    if (!isUser && !isAssistant) continue
-    const content = inner['content'] ?? obj['content']
-    const text    = extractText(content).trim()
-    const tools   = extractTools(content)
-    if (!text && tools.length === 0) continue
+    // Display messages + tool calls — same filter as the transcript readers.
+    const row = displayRow(obj)
+    if (!row) return
     acc.messages  += 1
-    acc.toolCalls += tools.length
-    for (const name of tools) acc.toolCounts[name] = (acc.toolCounts[name] ?? 0) + 1
+    acc.toolCalls += row.tools.length
+    for (const name of row.tools) acc.toolCounts[name] = (acc.toolCounts[name] ?? 0) + 1
     const ts = typeof obj['timestamp'] === 'string' ? obj['timestamp'] : undefined
     if (ts && /^\d{4}-\d{2}-\d{2}/.test(ts)) {
       const day = ts.slice(0, 10)
       acc.dayCounts[day] = (acc.dayCounts[day] ?? 0) + 1
     }
-  }
-  return acc
+  })
 }
 
 // Last 14 days (ascending, UTC) of message activity, filling gaps with 0.

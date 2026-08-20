@@ -447,17 +447,28 @@ export function App(): JSX.Element {
     } catch { /* non-fatal: normal restore event path still works */ }
   }, [])
 
+  // Focus/visibility churn used to multiply straight through to the main
+  // process: each sync walks every session there, and that sweep shells out.
+  // Leading-edge throttle so a burst of transitions costs one sweep. Nothing
+  // here needs sub-second freshness — it repairs the model name and re-attaches
+  // sessions, both of which are idempotent.
+  const lastSyncAtRef = useRef(0)
   useEffect(() => {
     void syncKnownSessions()
-    const onVisible = (): void => {
-      if (document.visibilityState === 'visible') void syncKnownSessions()
+    const syncThrottled = (): void => {
+      const now = Date.now()
+      if (now - lastSyncAtRef.current < 1000) return
+      lastSyncAtRef.current = now
+      void syncKnownSessions()
     }
-    const onFocus = (): void => { void syncKnownSessions() }
+    const onVisible = (): void => {
+      if (document.visibilityState === 'visible') syncThrottled()
+    }
     document.addEventListener('visibilitychange', onVisible)
-    window.addEventListener('focus', onFocus)
+    window.addEventListener('focus', syncThrottled)
     return () => {
       document.removeEventListener('visibilitychange', onVisible)
-      window.removeEventListener('focus', onFocus)
+      window.removeEventListener('focus', syncThrottled)
     }
   }, [syncKnownSessions])
 
