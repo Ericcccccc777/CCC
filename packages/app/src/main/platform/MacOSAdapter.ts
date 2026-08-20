@@ -28,7 +28,7 @@ import {
 //      `pidFile` is the live `claude` PID — same contract Windows gets via
 //      `Start-Process -PassThru`.
 //   2. `ccc-watcher-${id}.sh` polls for `pidFile` (≤ 5s grace) then
-//      `while kill -0 $PID; do sleep 1; done`. The watcher is what we hand
+//      a fork-free `read -t 1` tick (see waitForPidLines). The watcher is what we hand
 //      back as `LaunchResult.proc`, so its exit drives SessionManager's
 //      `result.proc.on('close', ...)` like Windows' outer-PS `WaitForExit`.
 //   3. The visible surface is a fresh Terminal.app window, opened via
@@ -95,6 +95,40 @@ const HOOK_SCRIPT_BODY =
 
 // POSIX single-quote escaping: `'` becomes `'\''` (close, escaped, reopen).
 const shq = (s: string): string => s.replace(/'/g, "'\\''")
+
+// The lines that wait for a pid to disappear, without forking once per second.
+//
+// `kill -0` and `read` are shell builtins, but `sleep` is /bin/sleep — an
+// external binary — so the obvious `while kill -0 $PID; do sleep 1; done` costs
+// one fork+exec every second, per session, for the entire life of the session.
+// A fifo held open read-write never delivers data and never reaches EOF, so
+// `read -t 1` against it is exactly a one-second wait that allocates nothing:
+// measured 0.00 user / 0.00 sys CPU over a 6-second watch on macOS (/bin/sh is
+// bash 3.2, where both builtins are present).
+//
+// Degradation is automatic. If the fifo cannot be created we never set TICK and
+// the loop uses /bin/sleep exactly as before. If the shell has no `read -t`, it
+// exits 2 (bash 3.2 returns 1 on a genuine timeout, so the two are
+// distinguishable) and the loop switches to /bin/sleep permanently.
+export function waitForPidLines(pidExpr: string): string[] {
+  return [
+    'TICK=""',
+    'FIFO=$(mktemp -u 2>/dev/null)',
+    'if [ -n "$FIFO" ] && mkfifo "$FIFO" 2>/dev/null; then',
+    '  if exec 9<> "$FIFO" 2>/dev/null; then TICK="fifo"; fi',
+    '  rm -f "$FIFO"',
+    'fi',
+    `while kill -0 ${pidExpr} 2>/dev/null; do`,
+    '  if [ "$TICK" = "fifo" ]; then',
+    '    read -t 1 _ <&9',
+    '    [ $? -eq 2 ] && TICK="" && sleep 1',
+    '  else',
+    '    sleep 1',
+    '  fi',
+    'done',
+  ]
+}
+
 const asq = (s: string): string => s.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
 
 interface MacOSCliProcessRecord {
@@ -440,7 +474,8 @@ export class MacOSAdapter implements PlatformAdapter {
       '  i=$((i+1))',
       '  sleep 0.1',
       'done',
-      '[ -n "$PID" ] && while kill -0 "$PID" 2>/dev/null; do sleep 1; done',
+      '[ -n "$PID" ] || exit 0',
+      ...waitForPidLines('"$PID"'),
       '',
     ].join('\n'), { mode: 0o755 })
 
@@ -527,7 +562,8 @@ export class MacOSAdapter implements PlatformAdapter {
       '  i=$((i+1))',
       '  sleep 0.1',
       'done',
-      '[ -n "$PID" ] && while kill -0 "$PID" 2>/dev/null; do sleep 1; done',
+      '[ -n "$PID" ] || exit 0',
+      ...waitForPidLines('"$PID"'),
       '',
     ].join('\n'), { mode: 0o755 })
 
@@ -551,7 +587,7 @@ export class MacOSAdapter implements PlatformAdapter {
 
     writeFileSync(monitor, [
       '#!/bin/sh',
-      `while kill -0 ${innerPid} 2>/dev/null; do sleep 1; done`,
+      ...waitForPidLines(String(innerPid)),
       `rm -f '${shq(monitor)}' 2>/dev/null`,
       '',
     ].join('\n'), { mode: 0o755 })
